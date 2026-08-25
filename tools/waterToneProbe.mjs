@@ -98,44 +98,83 @@ const measure = async (label, apply) => {
       const nearLo = +nearVals[Math.floor(nearVals.length * 0.02)].toFixed(3);
       const nearHi = +nearVals[Math.floor(nearVals.length * 0.98)].toFixed(3);
 
+      // BAND AREA, which is the measure that actually matches the complaint.
+      //
+      // A wide brightness range can still come from one enormous flat region
+      // plus a handful of bright crest pixels, and that is exactly what "the
+      // near field is a single colour" means. Counting how much of the near
+      // band the largest single tone owns catches it; the percentile spread
+      // does not.
+      const bins = new Map();
+      let nearN = 0;
+      for (let y = Math.floor(cv.height * 0.72); y < cv.height; y++) {
+        for (let x = 0; x < cv.width; x += 2) {
+          const i = (y * cv.width + x) * 4;
+          // Quantise to 12 levels per channel: enough to merge anti-aliasing
+          // and ripple jitter within a band, far too coarse to merge two.
+          const key =
+            (Math.round(d[i] / 21) << 16) | (Math.round(d[i + 1] / 21) << 8) | Math.round(d[i + 2] / 21);
+          bins.set(key, (bins.get(key) ?? 0) + 1);
+          nearN++;
+        }
+      }
+      const shares = [...bins.values()].sort((a, b) => b - a).map((n) => n / nearN);
+
       return {
         label,
         p02: pct(0.02),
-        p25: pct(0.25),
         p50: pct(0.5),
         p98: pct(0.98),
         range: +(pct(0.98) - pct(0.02)).toFixed(3),
         nearRange: +(nearHi - nearLo).toFixed(3),
         nearLo,
         meanSat,
+        // Share of the near field owned by its single largest tone. Above about
+        // 0.6 the region reads as one flat colour however wide its histogram is.
+        nearTop: +shares[0].toFixed(3),
+        // How many tones own a real share of it. Under three, there is no
+        // banding to see.
+        nearBands: shares.filter((s) => s >= 0.07).length,
       };
     },
     { label, apply },
   );
 };
 
-const rows = [];
-rows.push(await measure('baseline', null));
-rows.push(await measure('bands 0.40/0.62/0.82', { uBands: { x: 0.40, y: 0.62, z: 0.82 } }));
-rows.push(await measure('bands 0.55/0.75/0.90', { uBands: { x: 0.55, y: 0.75, z: 0.90 } }));
-rows.push(await measure('bands 0.70/0.85/0.95', { uBands: { x: 0.70, y: 0.85, z: 0.95 } }));
-rows.push(await measure('0.55/0.75/0.90 lift .18', { uBands: { x: 0.55, y: 0.75, z: 0.90 }, uLiftStrength: 0.18 }));
-rows.push(await measure('0.55/0.75/0.90 lift .18 dl 0', { uBands: { x: 0.55, y: 0.75, z: 0.90 }, uLiftStrength: 0.18, uDeepLift: 0.0 }));
+const bands = (x, y, z) => ({ uBands: { x, y, z } });
 
-console.log('\nWATER TONE  (water-02 framing, lower 55% of frame)');
-console.log('  variant                 p02    p25    p50    p98    range  nearRange  nearLo  meanSat');
+const rows = [];
+rows.push(await measure('baseline (shipped)', null));
+// The shipped thresholds were swept for tone alone and won on p02. The cost,
+// which nothing was measuring at the time, is that they push the median into
+// the deepest band too: the near field ends up owning one tone and reads as a
+// flat mass however wide its histogram is. Sweep back down with band AREA in
+// the scoring this time.
+rows.push(await measure('0.62/0.79/0.92', bands(0.62, 0.79, 0.92)));
+rows.push(await measure('0.64/0.81/0.93', bands(0.64, 0.81, 0.93)));
+rows.push(await measure('0.64/0.78/0.90', bands(0.64, 0.78, 0.90)));
+rows.push(await measure('0.64/0.84/0.95', bands(0.64, 0.84, 0.95)));
+rows.push(await measure('0.66/0.83/0.94', bands(0.66, 0.83, 0.94)));
+rows.push(await measure('0.68/0.82/0.92', bands(0.68, 0.82, 0.92)));
+
+console.log('\nWATER TONE AND BAND AREA  (water-02 framing)');
+console.log('  variant                p02    p50    p98    range  nearRange  nearTop  nearBands  meanSat');
 for (const r of rows) {
   if (!r) continue;
+  const flag = r.nearTop > 0.6 ? '  <- one flat tone' : r.nearBands < 3 ? '  <- too few bands' : '';
   console.log(
-    `  ${r.label.padEnd(22)} ${String(r.p02).padEnd(6)} ${String(r.p25).padEnd(6)} ` +
-      `${String(r.p50).padEnd(6)} ${String(r.p98).padEnd(6)} ${String(r.range).padEnd(6)} ` +
-      `${String(r.nearRange).padEnd(10)} ${String(r.nearLo).padEnd(7)} ${r.meanSat}`,
+    `  ${r.label.padEnd(21)} ${String(r.p02).padEnd(6)} ${String(r.p50).padEnd(6)} ` +
+      `${String(r.p98).padEnd(6)} ${String(r.range).padEnd(6)} ` +
+      `${String(r.nearRange).padEnd(10)} ${String(r.nearTop).padEnd(8)} ` +
+      `${String(r.nearBands).padEnd(10)} ${r.meanSat}${flag}`,
   );
 }
 console.log(`
-  Target: p02 around 0.35-0.45 so a trough is a readable shadow, total range
-  above 0.45. The reference is Wave Race 64, where a swell's shadow face is
-  legible from across a room.
+  Wanted, together rather than one at a time:
+    p02       0.30-0.45   a trough has to be a readable shadow
+    range     above 0.45
+    nearTop   below 0.55  no single tone may own the near field
+    nearBands 3 or more   there has to be visible banding to look at
 `);
 
 await browser.close();

@@ -153,7 +153,20 @@ export class Ocean {
          * barely moves while the low tail opens right up — that is the shape a
          * legible sea should have.
          */
-        uBands: { value: new Vector3(0.70, 0.85, 0.95) },
+         *
+         * That sweep scored tone alone, and won on it — but the same push that
+         * made the deep tone reachable also put the MEDIAN into the deepest
+         * band, so the near field came back owning a single flat colour. A
+         * histogram cannot see that: a wide range is equally consistent with
+         * four readable bands and with one enormous flat mass plus a few bright
+         * crest pixels. Re-swept with band AREA measured alongside tone, the
+         * near field's largest single tone went 0.764 at the old thresholds to
+         * 0.412 here, with three tones holding a real share instead of two —
+         * and p02, total range and mean saturation all came out better too, so
+         * this is not a trade against the previous finding but a correction to
+         * where it stopped.
+         */
+        uBands: { value: new Vector3(0.66, 0.83, 0.94) },
         /** Weights: x = N·L form, y = swell height, z = total height. */
         uBandMix: { value: new Vector3(0.5, 0.32, 0.18) },
         /** Fold (1 - jacobian) at which foam starts. */
