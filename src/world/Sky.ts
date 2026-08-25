@@ -250,6 +250,19 @@ void main() {
   // 0 at the zenith, 1 at the horizon. The pow() compresses the gradient down
   // towards the horizon, where the camera actually spends its time — the top
   // of the dome stays a single deep cobalt field.
+  // 0 at the zenith, 1 at the horizon. The pow() compresses the gradient down
+  // towards the horizon, where the camera actually spends its time.
+  //
+  // The cost is that the whole sky above 45 degrees falls inside the first band
+  // and a half, so looking straight up gives one flat field with a lumpy edge
+  // and nothing else in it. Spreading the bands linearly over the dome was
+  // tried and is a worse trade: the zenith gains one band and the horizon —
+  // which is in almost every frame — loses two, going from a banded sky to a
+  // single pale wash.
+  //
+  // Four bands cannot serve both ends of a dome. What the zenith actually
+  // needs is something IN it; the cloud layer stops around 25 degrees, so
+  // above that there is nothing to look at whatever the banding does.
   float t = 1.0 - pow(clamp(d.y, 0.0, 1.0), 0.52);
 
   // Two octaves of wobble: a long one that gives each band a lazy sweep, and a
