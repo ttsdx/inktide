@@ -19,6 +19,7 @@ import {
   ENGINE_NOZZLE,
   RUDDER_PIVOT,
 } from './boatGeometry.ts';
+import { buildRaceNumberGeometry } from './liveryGeometry.ts';
 import { HANDLEBAR_POINT, RIDER_MOUNT } from './hullSpec.ts';
 
 /**
@@ -133,6 +134,39 @@ export class Boat {
     this.part(buildCowlingGeometry(), paint, this.visual, 'cowling');
     this.part(buildSponsonGeometry(-1), paint, this.visual, 'sponsonPort');
     this.part(buildSponsonGeometry(1), paint, this.visual, 'sponsonStarboard');
+
+    // RACE NUMBER.
+    //
+    // Four boats separated only by hue are four boats nobody can tell apart at
+    // race distance, through spray, or against water that is already carrying
+    // most of the palette. The number is the thing that makes a rival a
+    // specific rival, and it is what a chase camera reads first when it comes
+    // up behind one.
+    //
+    // Painted in the foam white rather than the racer's own dark: the number
+    // has to hold its own value against a saturated hull whatever colour that
+    // hull is, and picking a second tone per racer would give four different
+    // answers to a question that has one. The ramp is tinted to the paint so
+    // the number's shadow side stays in the boat's own hue family instead of
+    // going grey.
+    const decal = this.material({
+      color: PALETTE.foam,
+      vertexColors: true,
+      rampTint: PALETTE.racerDark[ci],
+      rimColor: PALETTE.uiCyan,
+      rimStrength: 0.3,
+      specStrength: 0.34,
+      specSize: 0.3,
+      matcapStrength: 0.12,
+      name: 'BoatNumber',
+    });
+    // Ink lighter than the hull's. The number sits ON the boat, so a contour as
+    // heavy as the boat's own silhouette would make it read as a separate
+    // object stuck to the side.
+    const decalInk = { outline: { widthPx: 2.4 } };
+    const number = ci + 1;
+    this.part(buildRaceNumberGeometry(number, -1), decal, this.visual, 'numberPort', decalInk);
+    this.part(buildRaceNumberGeometry(number, 1), decal, this.visual, 'numberStarboard', decalInk);
 
     // Fine ink on the small parts. A 2.6 px line is right for a 5 m hull and
     // completely swallows a 7 cm rudder blade, which at race distance turns
