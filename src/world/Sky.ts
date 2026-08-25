@@ -219,12 +219,12 @@ float dirNoise(vec3 d, float scale) {
  * displaced by low-frequency noise, and each pixel still resolves to exactly
  * one of the five palette colours.
  */
-vec3 bandedSky(float t, float wobble) {
+vec3 bandedSky(float t, float wobble, vec3 low) {
   float x = clamp(t + wobble, 0.0, 1.0) * 4.0;
   float fi = clamp(floor(x), 0.0, 3.0);
   int i = int(fi);
   vec3 a = i == 0 ? C0 : i == 1 ? C1 : i == 2 ? C2 : C3;
-  vec3 b = i == 0 ? C1 : i == 1 ? C2 : i == 2 ? C3 : C4;
+  vec3 b = i == 0 ? C1 : i == 1 ? C2 : i == 2 ? C3 : low;
   // A 1-2 pixel smoothstep across the edge, no more: enough to stop the band
   // boundary aliasing into a staircase, far too narrow to read as a gradient.
   float e = fwidth(x) * 0.8;
@@ -256,7 +256,25 @@ void main() {
   // shorter one that roughens the cut. Amplitude is small — the bands must
   // still read as horizontal, just not as ruled lines.
   float wobble = (dirNoise(d, 2.6) - 0.5) * 0.075 + (dirNoise(d, 7.3) - 0.5) * 0.028;
-  vec3 col = bandedSky(t, wobble);
+
+  // WHERE THE WARMTH GOES.
+  //
+  // The horizon's warm sand used to be applied all the way round the compass
+  // at one strength, which produced an identical flat band whether the camera
+  // was pointing into the sun or directly away from it. A constant stripe with
+  // no relationship to the light does not read as atmosphere; every capture
+  // came back with it looking like a stuck skybox seam laid across the middle
+  // of the frame.
+  //
+  // Warmth at the horizon is scattered sunlight, so it belongs on the sun's
+  // bearing and nowhere else. Away from it the horizon recedes into the same
+  // pale cyan the distant water fades to, which is also what lets the two meet
+  // without a visible seam.
+  float sunAz = dot(normalize(d.xz + vec2(1e-5)), normalize(uSunDir.xz + vec2(1e-5)));
+  float warm = smoothstep(-0.15, 0.80, sunAz);
+  vec3 horizonCol = mix(C3, C4, warm);
+
+  vec3 col = bandedSky(t, wobble, horizonCol);
 
   // A warm collar around the sun, quantised into two steps.
   //
@@ -272,11 +290,17 @@ void main() {
   col = mix(col, ${glslVec3(PALETTE.sun)}, tight * 0.6);
 
   // A single hard haze band riding the horizon line, which gives the ocean
-  // something to meet instead of fading into nothing. It wobbles with the same
-  // noise so it belongs to the same painted sky.
-  float hy = d.y - 0.006 + wobble * 0.16;
-  float band = 1.0 - smoothstep(0.0, 0.030, abs(hy));
-  col = mix(col, C4, band * 0.6);
+  // something to meet instead of fading into nothing.
+  //
+  // The wobble is given nearly four times its old authority here. At 0.16 of
+  // an amplitude that is itself small, the band's height varied by about a
+  // tenth of its own thickness, which is to say it was a ruled line; the
+  // critic measured it as a rectangle with a perfectly straight top and bottom
+  // edge running the full width of every outdoor frame. It now has to visibly
+  // rise and fall along its length.
+  float hy = d.y - 0.006 + wobble * 0.58;
+  float band = 1.0 - smoothstep(0.0, 0.026, abs(hy));
+  col = mix(col, horizonCol, band * mix(0.16, 0.68, warm));
 
   outColor = vec4(col, 1.0);
   // Sky writes a null normal so the Sobel pass leaves it alone.
