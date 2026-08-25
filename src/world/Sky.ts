@@ -89,7 +89,10 @@ export class Sky {
       const cam = camera as PerspectiveCamera;
       sun.position.copy(SUN).multiplyScalar(0.86);
       sun.quaternion.copy(cam.quaternion);
-      sun.scale.setScalar(0.4);
+      // Smaller billboard. The rays are bounded by the quad, so its size sets
+      // how far the flare can reach across the sky and how far off-screen the
+      // sun can be while still leaving marks in the frame.
+      sun.scale.setScalar(0.26);
     };
     this.group.add(sun);
 
@@ -436,10 +439,22 @@ void main() {
 
   // Four long rays and four short ones offset by 45 degrees. The asymmetry is
   // what stops it reading as a lens artefact.
-  float breathe = 0.92 + 0.08 * sin(uTime * 0.8);
-  float longRays = rays(ang, r, 4.0, 0.0, 0.88 * breathe, 0.085);
-  float shortRays = rays(ang, r, 4.0, 0.7853982, 0.42 * breathe, 0.115);
-  float star = max(longRays, shortRays) * step(0.10, r);
+  //
+  // Lengths cut hard from 0.88/0.42. The billboard is large — it has to be, to
+  // hold a sun that reads at distance — and a ray reaching 88% of its radius
+  // therefore reached most of the way across the sky. Worse, when the sun sat
+  // just outside the frustum the quad's edge was still on screen, so frames
+  // with no sun in them picked up an unexplained white scratch at the top: it
+  // appeared in four separate captures before anyone worked out what it was.
+  // Keeping every ray well inside the quad means the flare cannot outlive its
+  // own source.
+  float breathe = 0.94 + 0.06 * sin(uTime * 0.8);
+  float longRays = rays(ang, r, 4.0, 0.0, 0.46 * breathe, 0.075);
+  float shortRays = rays(ang, r, 4.0, 0.7853982, 0.30 * breathe, 0.10);
+  // Fade the outer third of every ray so it tapers out instead of being cut
+  // off by the wedge's own length test, which leaves a visible squared tip.
+  float rayFade = 1.0 - smoothstep(0.30, 0.48, r);
+  float star = max(longRays, shortRays) * step(0.10, r) * rayFade;
 
   float a = clamp(core + collar * 0.92 + star * 0.62, 0.0, 1.0);
   vec3 col = mix(GLOW, CORE, clamp(core + collar * 0.5 + star * 0.25, 0.0, 1.0));
