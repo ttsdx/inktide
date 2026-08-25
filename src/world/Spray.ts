@@ -199,7 +199,15 @@ export class Spray implements GameSystem {
       // upward bias, because spray that only goes sideways looks like dust.
       const jitter = 0.55 + Math.random() * 0.9;
       b[i * B_FLOATS + 0] = req.velocity.x + sx * spread * 2.4 * jitter;
-      b[i * B_FLOATS + 1] = req.velocity.y + (0.35 + Math.random() * 1.15) * spread * 1.5;
+      // The vertical kick is deliberately smaller than the lateral spread. A
+      // droplet has to complete its arc and hit the water inside its own
+      // lifetime or it simply vanishes at the top of the climb, and a burst
+      // where every particle disappears while still rising reads as a static
+      // horizontal band of blobs hanging over the sea rather than as thrown
+      // water. Together with the longer lives at the emitters, the arc now
+      // closes: they go up, come down, and the shader's water test kills them
+      // on contact, which is what puts them out of existence in the right place.
+      b[i * B_FLOATS + 1] = req.velocity.y + (0.35 + Math.random() * 1.15) * spread * 0.85;
       b[i * B_FLOATS + 2] = req.velocity.z + sz * spread * 2.4 * jitter;
       b[i * B_FLOATS + 3] = life * (0.62 + Math.random() * 0.62);
 

@@ -629,7 +629,10 @@ export class BoatPhysics implements BoatState {
           count: Math.round(10 + strength * 30),
           spread: 0.8 + strength * 1.5,
           size: 0.12 + strength * 0.13,
-          life: 0.42 + strength * 0.40,
+          // A landing plume is thrown harder than running spray, so it needs
+          // proportionally longer to fall back. Same rule: the arc has to close
+          // inside the lifetime or the plume hangs.
+          life: 0.55 + strength * 0.55,
         });
       }
     }
@@ -667,10 +670,14 @@ export class BoatPhysics implements BoatState {
         1.0 + intensity * 1.9,
         this.velocity.z * 0.22 + this.right.z * side * (1.5 + slide * 5.0),
       ),
-      count: Math.round(3 + intensity * 10),
+      count: Math.round(3 + intensity * 8),
       spread: 0.45 + slide * 1.1,
       size: 0.09 + intensity * 0.08,
-      life: 0.30 + intensity * 0.26,
+      // Long enough for the droplet to come back down and hit the water, which
+      // is what ends it. At the old 0.30-0.56 s most of a burst expired at the
+      // top of its climb, so the spray never fell and every action frame had a
+      // band of white blobs suspended over open water.
+      life: 0.42 + intensity * 0.34,
     });
   }
 
