@@ -699,8 +699,14 @@ export class Course {
         // while driving a legal line would be a bug.
         width: this.widthAt(t) + 7,
         // See `Checkpoint.validationWidth`. The floor matters at the chicane,
-        // where the corridor is only 8.5 m and a nudge is otherwise fatal.
-        validationWidth: Math.max(this.widthAt(t) * 2.2, 26),
+        // where the corridor is only 9 m: scaled purely from the corridor the
+        // test came out at 26 m, and an understeery moment through there is
+        // worth nearly 30 m of lateral error, so a racer that ran wide and
+        // rejoined perfectly legally was still losing the lap. The floor is
+        // safe because cutting is no longer this test's job — `RaceDirector`
+        // catches it over the whole gate-to-gate segment, and on the side that
+        // distinguishes a shortcut from a mistake.
+        validationWidth: Math.max(this.widthAt(t) * 2.2, 36),
         startFinish: i === 0,
       });
     }

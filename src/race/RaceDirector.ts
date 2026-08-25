@@ -142,6 +142,8 @@ interface RacerInternal {
    * banked a gate. See the anti-cut note in `checkCheckpoint`.
    */
   cutSinceGate: boolean;
+  /** Seconds of sustained gross departure accumulated so far. See CUT_SECONDS. */
+  cutTimer: number;
   wrongWayTimer: number;
   rightWayTimer: number;
   lapStartTime: number;
@@ -189,6 +191,10 @@ const LEFT_COURSE_MULTIPLE = 5.5;
  * it comfortably and a straight does not.
  */
 const CUT_MIN_CURVATURE = 0.002;
+/** Seconds of sustained departure before it counts as a cut. */
+const CUT_SECONDS = 1.5;
+/** How fast the cut timer unwinds once the racer is back where it belongs. */
+const CUT_DECAY = 0.5;
 
 export class RaceDirector {
   phase: RacePhase = 'intro';
@@ -293,6 +299,7 @@ export class RaceDirector {
       s.gatePrimed = false;
       s.missedReported = false;
       s.cutSinceGate = false;
+      s.cutTimer = 0;
       s.wrongWayTimer = 0;
       s.rightWayTimer = 0;
       s.lapStartTime = 0;
@@ -411,16 +418,27 @@ export class RaceDirector {
       // so the boat is on the inside when the two share a sign. Beyond
       // LEFT_COURSE_MULTIPLE the boat is so far out that it is not racing the
       // circuit at all and the side stops mattering.
+      //
+      // AND SO DOES DURATION
+      //
+      // Sidedness alone still misreads the chicane, because in an S-bend the
+      // outside of one element is the inside of the next: a racer that ran wide
+      // at Chicane In was, one spline sample later, "inside" Chicane Flick and
+      // lost the lap for it. Cutting is a sustained act — the chord of The Pin
+      // is 112 m and takes nearly four seconds — while the S-bend artefact lasts
+      // a fraction of one. Requiring the departure to persist separates them
+      // with room to spare, and the timer decays rather than resetting so a
+      // racer cannot chop a cut into legal-length pieces.
       const off = Math.abs(_progress.lateralOffset);
       const widths = off / Math.max(this.course.widthAt(t), 1);
-      if (widths > LEFT_COURSE_MULTIPLE) {
-        s.cutSinceGate = true;
-      } else if (widths > CUT_CORRIDOR_MULTIPLE) {
+      let cutting = widths > LEFT_COURSE_MULTIPLE;
+      if (!cutting && widths > CUT_CORRIDOR_MULTIPLE) {
         const k = this.course.signedCurvatureAt(t);
-        const inside =
+        cutting =
           Math.abs(k) > CUT_MIN_CURVATURE && Math.sign(_progress.lateralOffset) === Math.sign(k);
-        if (inside) s.cutSinceGate = true;
       }
+      s.cutTimer = Math.max(0, s.cutTimer + (cutting ? ctx.dt : -ctx.dt * CUT_DECAY));
+      if (s.cutTimer > CUT_SECONDS) s.cutSinceGate = true;
 
       // Clamp to the validated lap count. A boat cannot be reported as more
       // than one lap ahead of the gates it has actually passed, which closes the
@@ -490,6 +508,7 @@ export class RaceDirector {
       // widths out; contact puts it barely two.
       if (s.cutSinceGate) {
         s.cutSinceGate = false;
+        s.cutTimer = 0;
         return;
       }
       this.passGate(p, s);
@@ -514,6 +533,7 @@ export class RaceDirector {
     s.gatePrimed = false;
     s.missedReported = false;
     s.cutSinceGate = false;
+    s.cutTimer = 0;
 
     // The split is measured from the start of the lap in progress, so it is
     // directly comparable with the same gate on any other lap.
@@ -778,6 +798,7 @@ function blankInternal(gateCount: number): RacerInternal {
     gatePrimed: false,
     missedReported: false,
     cutSinceGate: false,
+    cutTimer: 0,
     wrongWayTimer: 0,
     rightWayTimer: 0,
     lapStartTime: 0,
