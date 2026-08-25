@@ -36,7 +36,32 @@ await page.evaluate(() => {
   window.__INKTIDE__.harness.pause();
 });
 
+/**
+ * Reload before every variant.
+ *
+ * Restoring the uniforms between measurements was not enough. A control — the
+ * same measurement taken first and again last — came back with the shadow tone
+ * 36 degrees off the palette on the first pass and 3 degrees off on the last,
+ * and the share of water inside the ocean family at 0.25 against 0.88. Nothing
+ * in the sweep was isolated, so none of its rows could be compared, and the
+ * values shipped from the previous run of it were chosen from noise.
+ *
+ * A fresh page per variant is slower and is the only version of this that can
+ * be trusted. The control row exists to keep proving it.
+ */
+const reset = async () => {
+  await page.goto(`${URL}?harness=1&quality=high&adaptive=0`, { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => Boolean(window.__INKTIDE__?.harness.ready()), null, {
+    timeout: 180000,
+  });
+  await page.evaluate(() => {
+    document.getElementById('boot')?.remove();
+    window.__INKTIDE__.harness.pause();
+  });
+};
+
 const measure = async (label, apply) => {
+  await reset();
   return await page.evaluate(
     ({ label, apply }) => {
       const g = window.__INKTIDE__;
@@ -148,6 +173,46 @@ const measure = async (label, apply) => {
       }
       const shares = [...bins.values()].sort((a, b) => b - a).map((n) => n / nearN);
 
+      // PALETTE FIDELITY AND DARK TONE.
+      //
+      // The two measures above see structure and nothing else, and a sweep
+      // scored on structure alone will happily trade the committed palette
+      // away to get it: switching on the fresnel lift, the sun plane and the
+      // pre-filter together improved every structural number while moving 88%
+      // of the water into hue 170-190 against an ocean family that runs
+      // 187-215, and raising the darkest 2% of it to value 0.41 — no indigo
+      // anywhere, and no shadow anywhere.
+      const hsv = [];
+      for (let y = y0; y < cv.height; y++) {
+        for (let x = 0; x < cv.width; x += 2) {
+          const i = (y * cv.width + x) * 4;
+          const r = d[i] / 255;
+          const gg = d[i + 1] / 255;
+          const b = d[i + 2] / 255;
+          const mx = Math.max(r, gg, b);
+          const mn = Math.min(r, gg, b);
+          let h = 0;
+          if (mx > mn) {
+            const c2 = mx - mn;
+            if (mx === r) h = ((gg - b) / c2 + 6) % 6;
+            else if (mx === gg) h = (b - r) / c2 + 2;
+            else h = (r - gg) / c2 + 4;
+            h *= 60;
+          }
+          hsv.push([mx, h]);
+        }
+      }
+      hsv.sort((a, b) => a[0] - b[0]);
+      const dark = hsv.slice(0, Math.max(1, Math.floor(hsv.length * 0.1)));
+      const darkVal = +(dark.reduce((a, p) => a + p[0], 0) / dark.length).toFixed(3);
+      const darkHue = +(dark.reduce((a, p) => a + p[1], 0) / dark.length).toFixed(1);
+      // waterDeep is hue 215. How far the shadow tone has rotated off it.
+      const darkHueErr = +Math.abs(darkHue - 215).toFixed(1);
+      // Share of the water inside the ocean family's own hue range.
+      const inFamily = +(
+        (hsv.filter((p) => p[1] >= 185 && p[1] <= 220).length / hsv.length)
+      ).toFixed(3);
+
       return {
         label,
         p02: pct(0.02),
@@ -163,6 +228,9 @@ const measure = async (label, apply) => {
         // How many tones own a real share of it. Under three, there is no
         // banding to see.
         nearBands: shares.filter((s) => s >= 0.07).length,
+        darkVal,
+        darkHueErr,
+        inFamily,
       };
     },
     { label, apply },
@@ -183,35 +251,62 @@ rows.push(await measure('baseline (shipped)', null));
 // probe only writes a uniform that already exists. Now that they are real, the
 // values they were given are still only reasoned guesses, so sweep them.
 rows.push(await measure('lift 0.0', { uLiftStrength: 0.0 }));
+rows.push(await measure('lift 0.25', { uLiftStrength: 0.25 }));
 rows.push(await measure('lift 0.5', { uLiftStrength: 0.5 }));
-rows.push(await measure('lift 1.0', { uLiftStrength: 1.0 }));
 rows.push(await measure('sunPlane 0.0', { uSunPlaneStrength: 0.0 }));
-rows.push(await measure('sunPlane 0.6', { uSunPlaneStrength: 0.6 }));
+rows.push(await measure('sunPlane 0.45', { uSunPlaneStrength: 0.45 }));
 rows.push(await measure('sunPlane 1.0', { uSunPlaneStrength: 1.0 }));
-rows.push(await measure('preFilterFloor 0.0', { uPreFilterFloor: 0.0 }));
-rows.push(await measure('preFilterFloor 0.25', { uPreFilterFloor: 0.25 }));
-rows.push(await measure('preFilterFloor 0.5', { uPreFilterFloor: 0.5 }));
-rows.push(await measure('deepLift 0.1', { uDeepLift: 0.1 }));
-rows.push(await measure('deepLift 0.3', { uDeepLift: 0.3 }));
+rows.push(await measure('preFilter 0.0', { uPreFilterFloor: 0.0 }));
+rows.push(await measure('preFilter 0.35', { uPreFilterFloor: 0.35 }));
+rows.push(await measure('deepLift 0.0', { uDeepLift: 0.0 }));
+// The bands are the other half of it: with formT finally a real variable, the
+// coordinate no longer reaches the upper thresholds and the palette's top tones
+// are unreachable — the mirror of the fault the thresholds were raised to fix.
+rows.push(await measure('bands 0.42/0.60/0.80', bands(0.42, 0.60, 0.80)));
+rows.push(await measure('bands 0.50/0.66/0.84', bands(0.50, 0.66, 0.84)));
+rows.push(await measure('bands 0.56/0.72/0.88', bands(0.56, 0.72, 0.88)));
+// The combination the numbers above point at.
+rows.push(
+  await measure('combined', {
+    uLiftStrength: 0.25,
+    uSunPlaneStrength: 0.45,
+    uBands: { x: 0.50, y: 0.66, z: 0.84 },
+  }),
+);
+// CONTROL. The same measurement as row one, taken last.
+//
+// If it does not match, the rows in between are not isolated and none of them
+// can be compared — which is worth knowing before any of these numbers is used
+// to pick a shipping value.
+rows.push(await measure('baseline (control)', null));
 
-console.log('\nWATER TONE AND BAND AREA  (water-02 framing)');
-console.log('  variant                p02    p50    p98    range  nearRange  nearTop  nearBands  meanSat');
+console.log('\nWATER  (water-02 framing)');
+console.log(
+  '  variant                range  nearTop  nearBands  darkVal  darkHueErr  inFamily  meanSat',
+);
 for (const r of rows) {
   if (!r) continue;
-  const flag = r.nearTop > 0.6 ? '  <- one flat tone' : r.nearBands < 3 ? '  <- too few bands' : '';
+  const fails = [];
+  if (r.nearTop > 0.55) fails.push('flat');
+  if (r.nearBands < 3) fails.push('bands');
+  if (r.darkVal > 0.34) fails.push('no shadow');
+  if (r.darkHueErr > 18) fails.push('hue');
+  if (r.inFamily < 0.4) fails.push('off-palette');
   console.log(
-    `  ${r.label.padEnd(21)} ${String(r.p02).padEnd(6)} ${String(r.p50).padEnd(6)} ` +
-      `${String(r.p98).padEnd(6)} ${String(r.range).padEnd(6)} ` +
-      `${String(r.nearRange).padEnd(10)} ${String(r.nearTop).padEnd(8)} ` +
-      `${String(r.nearBands).padEnd(10)} ${r.meanSat}${flag}`,
+    `  ${r.label.padEnd(21)} ${String(r.range).padEnd(6)} ${String(r.nearTop).padEnd(8)} ` +
+      `${String(r.nearBands).padEnd(10)} ${String(r.darkVal).padEnd(8)} ` +
+      `${String(r.darkHueErr).padEnd(11)} ${String(r.inFamily).padEnd(9)} ${r.meanSat}` +
+      (fails.length ? `  <- ${fails.join(', ')}` : '  ok'),
   );
 }
 console.log(`
-  Wanted, together rather than one at a time:
-    p02       0.30-0.45   a trough has to be a readable shadow
-    range     above 0.45
-    nearTop   below 0.55  no single tone may own the near field
-    nearBands 3 or more   there has to be visible banding to look at
+  All of these together, not one at a time:
+    range      above 0.45
+    nearTop    below 0.55   no single tone may own the near field
+    nearBands  3 or more    there has to be visible banding to look at
+    darkVal    below 0.34   the shadow tone has to actually be dark
+    darkHueErr below 18 deg the shadow has to still be waterDeep's indigo
+    inFamily   above 0.40   most of the water inside the ocean family's hues
 `);
 
 await browser.close();

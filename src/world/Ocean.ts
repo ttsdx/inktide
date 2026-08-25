@@ -166,7 +166,7 @@ export class Ocean {
         uFormRange: { value: new Vector2(0.45, 0.78) },
         /** How far the deepest band is lifted towards the mid blue. */
         uDeepLift: { value: 0.1 },
-        uSunPlaneStrength: { value: 1.0 },
+        uSunPlaneStrength: { value: 0.45 },
         uLiftStrength: { value: 0.5 },
         /**
          * How much banded colour survives where a pixel cannot resolve the
