@@ -132,6 +132,45 @@ export class Ocean {
         uSkyTint: { value: PALETTE.skyMid.clone() },
         uHorizon: { value: PALETTE.skyHorizon.clone() },
 
+        /**
+         * THESE FIVE WERE DECLARED IN THE SHADER AND NEVER DEFINED HERE.
+         *
+         * A ShaderMaterial uniform that is not in this map is never set, and
+         * WebGL initialises it to zero — so three of the layers this file's own
+         * header lists as the art direction have been switched off since they
+         * were written, and each one had a paragraph of commentary above it
+         * explaining behaviour that was not happening:
+         *
+         *   uFormRange at (0,0) turns the N.L remap into clamp(ndl / 0.01),
+         *     which is a hard step at almost zero. Every pixel facing the sun
+         *     at all got formT = 1, so the band coordinate's largest term was a
+         *     CONSTANT and the wave-face shading the whole band system is built
+         *     on was not happening. This is the significant one.
+         *   uSunPlaneStrength at 0 removed the hard lit plane over the bands.
+         *   uLiftStrength at 0 removed the fresnel and horizon lift.
+         *   uDeepLift at 0 left the deep band as raw waterDeep, which the note
+         *     beside it says the grade eats into an almost-black hole.
+         *   uPreFilterFloor at 0 let the anti-alias blend go all the way to the
+         *     flat tone instead of keeping a floor of banded colour.
+         *
+         * The tuning probe could not have caught it either: it writes a sweep
+         * value only when the uniform already exists, so every sweep of these
+         * four silently did nothing and reported that they did not matter.
+         */
+        /**
+         * The N.L range the sea can actually produce, for the band remap.
+         *
+         * The sun sits 39 degrees up, so a flat sea returns 0.62 and the
+         * steepest face in the Gerstner budget swings it to roughly 0.45..0.78.
+         */
+        uFormRange: { value: new Vector2(0.45, 0.78) },
+        /** How far the deepest band is lifted towards the mid blue. */
+        uDeepLift: { value: 0.2 },
+        uSunPlaneStrength: { value: 1.0 },
+        uLiftStrength: { value: 1.0 },
+        /** Banded colour that survives where a pixel cannot resolve the bands. */
+        uPreFilterFloor: { value: 0.25 },
+
         /** Floor on band-edge width, in band units. Anti-aliasing does the rest. */
         uBandSoftness: { value: 0.004 },
         /** Band thresholds along the shading coordinate. */
