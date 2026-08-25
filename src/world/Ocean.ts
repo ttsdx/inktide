@@ -1464,6 +1464,25 @@ void main() {
   // Term isolation for the capture harness. Each channel carries one candidate
   // so a single frame says which one owns an artefact, instead of a round of
   // captures per guess.
+  //
+  // DO NOT TRUST THIS UNTIL IT IS FIXED.
+  //
+  // Measured with one capture per process, so no shared page state can be
+  // involved, sampling the same central water region, reading uDebug back from
+  // the material after the render to confirm it arrived:
+  //
+  //   uDebug 0  rgb(16,106,106)
+  //   uDebug 1  rgb(16, 98, 57)
+  //   uDebug 2  rgb(16, 98, 57)   identical to mode 1, which outputs different
+  //                               channels, so at least one of them is wrong
+  //   uDebug 4  rgb(16,106,106)   identical to mode 0, so the tap is not taking
+  //   uDebug 5  rgb(16,106,106)   effect at all
+  //
+  // The block is reached — 1 and 2 do change the frame — but its later branches
+  // do not, and two branches that write different values produce the same
+  // pixels. Something between this write and the composite is not what it
+  // looks like. Until that is understood, any conclusion drawn from these
+  // frames is unfounded; one already was, and had to be reverted.
   if (uDebug > 0.5) {
     if (uDebug < 1.5)      outColor = vec4(foamEdge, b3, sunPlane, 1.0);
     else if (uDebug < 2.5) outColor = vec4(
