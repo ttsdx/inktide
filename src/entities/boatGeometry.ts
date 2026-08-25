@@ -593,6 +593,24 @@ const STATIONS: readonly HullStation[] = HULL_STATION_Z.map(sampleHullStation);
 const BOTTOM_U = [0, 0.4, 0.74, 1];
 
 /**
+ * The same columns for the lofted panel, with 0.4 DUPLICATED.
+ *
+ * Vertex colours interpolate across a triangle, so a tint that walks smoothly
+ * from column to column paints the boat with an airbrush — which is what the
+ * bottom panel was doing. A pixel scan across the hull found the red channel
+ * climbing 114, 130, 134, 138, 142, 146, 150, 154 over a hundred pixels with no
+ * plateau anywhere: a Lambert-looking ramp on a surface whose entire art
+ * direction is hard bands, and the paint, not the lighting, was producing it.
+ *
+ * Two coincident columns carrying different tints give the boundary zero width,
+ * so the step is exact. It is the same trick the topside already uses to keep
+ * both edges of the racing stripe crisp.
+ */
+const BOTTOM_PANEL_U = [0, 0.4, 0.4, 0.74, 1];
+/** One flat tint per column of BOTTOM_PANEL_U. The pair at 0.4 is the cut. */
+const BOTTOM_PANEL_TINT: readonly Tint[] = [KEEL, KEEL, WET, WET, WET];
+
+/**
  * Bottom surface at fractional distance `u` from keel to chine.
  *
  * The height blend is very slightly convex rather than linear, which gives the
@@ -792,7 +810,7 @@ export function buildHullGeometry(): BufferGeometry {
     stitchGrid(
       b,
       STATIONS.map((st) =>
-        BOTTOM_U.map((u) => bottomPoint(st, u, side, mixTint(KEEL, WET, u))),
+        BOTTOM_PANEL_U.map((u, i) => bottomPoint(st, u, side, BOTTOM_PANEL_TINT[i])),
       ),
       // Reference above the bottom panel so "outward" resolves to downward.
       { ref: (i) => _ref.set(0, STATIONS[i].keelY + 0.4, STATIONS[i].z) },
