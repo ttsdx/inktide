@@ -55,6 +55,7 @@ function parseArgs(argv) {
     quality: 'ultra',
     keepOpen: false,
     probe: false,
+    waterline: false,
     timeout: 120000,
   };
   for (let i = 2; i < argv.length; i++) {
@@ -70,6 +71,7 @@ function parseArgs(argv) {
     else if (a === '--quality') out.quality = next();
     else if (a === '--shotfile') next();
     else if (a === '--probe') out.probe = true;
+    else if (a === '--waterline') out.waterline = true;
     else if (a === '--list') out.list = true;
     else if (a === '--timeout') out.timeout = Number(next());
     else if (a === '--help' || a === '-h') {
@@ -166,6 +168,7 @@ async function main() {
   url.searchParams.set('quality', args.quality);
   url.searchParams.set('adaptive', '0');
   if (args.probe) url.searchParams.set('probe', '1');
+  if (args.waterline) url.searchParams.set('waterline', '1');
 
   console.log(`\nLoading ${url.toString()} at ${args.width}x${args.height} @${args.scale}x`);
   await page.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: args.timeout });
@@ -295,6 +298,8 @@ function applyShot({ shot, from }) {
       // Framed relative to the boat's own heading, so a shot stays composed
       // wherever on the circuit the racer has got to by the target time.
       h.frameBoat(c.index ?? 0, c.yaw ?? 0, c.pitch ?? 0.2, c.distance ?? 8, c.lookHeight ?? 1.0);
+    } else if (c.mode === 'station') {
+      h.frameWaterlineStation(c.index ?? 0, c.back ?? 4, c.lift ?? 0.6);
     } else if (c.mode === 'prop') {
       h.frameProp(c.kind ?? 'buoy', c.index ?? 0, c.yaw ?? 0, c.pitch ?? 0, c.distance ?? 6, c.lookHeight ?? 0);
     } else h.setCamera(c.mode);

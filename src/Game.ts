@@ -7,9 +7,10 @@ import { Effects } from './core/Effects.ts';
 import { Sky } from './world/Sky.ts';
 import { Ocean, type HullContact } from './world/Ocean.ts';
 import { WakeField, type WakeEmitter } from './world/WakeField.ts';
-import { sampleOcean } from './world/gerstner.ts';
+import { oceanHeight, sampleOcean } from './world/gerstner.ts';
 import { LAYER_OPAQUE, LAYER_OVERLAY, LAYER_SKY } from './render/layers.ts';
 import { ProbeScene } from './dev/ProbeScene.ts';
+import { RIG_STATIONS, WaterlineRig, stationPosition } from './dev/WaterlineRig.ts';
 import { Course } from './race/Course.ts';
 import { RacingLine } from './race/RacingLine.ts';
 import { RaceDirector, type RaceEvent } from './race/RaceDirector.ts';
@@ -78,6 +79,7 @@ export class Game {
   private started = false;
   private paused = false;
   private probe: ProbeScene | null = null;
+  private waterline: WaterlineRig | null = null;
 
   /** Reusable buffers so the per-frame wiring does not allocate. */
   private readonly emitters: WakeEmitter[] = [];
@@ -196,6 +198,11 @@ export class Game {
     if (url.searchParams.get('probe') === '1') {
       this.probe = new ProbeScene();
       scene.add(this.probe.root);
+    }
+
+    if (url.searchParams.get('waterline') === '1') {
+      this.waterline = new WaterlineRig();
+      scene.add(this.waterline.root);
     }
 
     this.rig.mode = 'chase';
@@ -504,6 +511,7 @@ export class Game {
     this.ocean.setContacts(this.contacts);
     this.spray?.update(ctx);
     this.probe?.update(elapsed);
+    this.waterline?.update(elapsed);
     this.sky.update(cam, elapsed);
     this.ocean.update(cam, elapsed);
 
@@ -899,6 +907,24 @@ export class Game {
         target.z + Math.cos(yaw) * distance * cp,
       );
       this.rig.setFree(eye, new Vector3(target.x, target.y + lookHeight, target.z));
+    },
+
+    /**
+     * Look at one waterline station from `back` metres in front of it, at the
+     * height of the water there. Eye level with the surface is the only angle
+     * that turns a height error into a readable offset on the staff; from above
+     * a hovering object and a correctly floating one look identical.
+     */
+    frameWaterlineStation: (index: number, back = 4, lift = 0.6): void => {
+      if (!this.waterline) return;
+      const at = stationPosition(index, new Vector3());
+      const h = oceanHeight(at.x, at.z, this.simTime);
+      const scale = Math.max(1, RIG_STATIONS[index]?.dist ?? 1);
+      // Stand off proportionally to the station's own size so every station is
+      // framed the same on screen.
+      const d = back * Math.sqrt(scale);
+      const eye = new Vector3(at.x + d * 0.35, h + lift * Math.sqrt(scale), at.z + d);
+      this.rig.setFree(eye, new Vector3(at.x, h + lift * 0.5 * Math.sqrt(scale), at.z));
     },
 
     setOrbit: (angle: number, radius: number, height: number): void => {
