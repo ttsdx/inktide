@@ -855,8 +855,6 @@ export function buildHullGeometry(): BufferGeometry {
  */
 export function buildDeckGeometry(): BufferGeometry {
   const b = new SurfaceBuilder();
-  const deckRef = (list: readonly HullStation[]) => (i: number) =>
-    _ref.set(0, list[i].sheerY - 0.3, list[i].z);
 
   for (const side of [-1, 1]) {
     // Rolled gunwale: a 5 cm band from the sheer up to the deck edge, tinted
@@ -871,15 +869,22 @@ export function buildDeckGeometry(): BufferGeometry {
           { x: side * g.x, y: g.y, z: st.z, t: FLASH },
         ];
       }),
-      { ref: deckRef(STATIONS) },
+      { dir: _dir.set(side, 1, 0).normalize() },
     );
 
+    // The deck is tested against straight up, NOT radially outward from an
+    // axis point like the hull bands are. Where the after deck dishes into the
+    // engine bay the surface descends as it runs inboard, and a radial test
+    // from a point near the bay floor resolves that slope as facing *away* from
+    // the reference — which silently wound the whole aft slope inside out and
+    // put a backfacing hole in the deck the camera spends the race behind.
+    // Nothing on a deck ever overhangs, so +Y is the test that cannot be wrong.
     stitchGrid(
       b,
       STATIONS.map((st) =>
         deckHalfProfile(st).map((p) => ({ x: side * p.x, y: p.y, z: st.z, t: p.t })),
       ),
-      { ref: deckRef(STATIONS) },
+      { dir: _dir.set(0, 1, 0) },
     );
   }
 
@@ -900,8 +905,13 @@ export function buildDeckGeometry(): BufferGeometry {
           t: v === 0 ? PANEL : CAVITY,
         }));
       }),
-      // Seen from inside the well, so the outward test is inverted.
-      { ref: (i) => _ref.set(0, COAMING_Y, wellStations[i].z), sign: -1 },
+      // The well is a cavity, so its walls face the centreline rather than
+      // away from it. Tested against a literal direction and not against an
+      // axis point: at the fore and aft ends the opening tapers to nothing and
+      // the closing triangles lie almost exactly *in* the plane through any
+      // sensible axis point, which leaves the radial test deciding their
+      // winding on rounding error.
+      { dir: _dir.set(-side, 0, 0) },
     );
 
     stitchGrid(

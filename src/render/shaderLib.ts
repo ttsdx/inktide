@@ -312,9 +312,9 @@ export function celUniformDefaults() {
     uShadeSoftness: { value: 0.016 },
     uAmbientWrap: { value: 0.55 },
     /** Sky colour added into the shadow bands. See the fill note in celShade. */
-    uSkyFill: { value: 0.16 },
+    uSkyFill: { value: 0.1 },
     /** Sun colour added into the lit band. */
-    uKeyFill: { value: 0.13 },
+    uKeyFill: { value: 0.15 },
     uFogNear: { value: 260 },
     uFogFar: { value: 1500 },
     uCameraNear: { value: 0.1 },

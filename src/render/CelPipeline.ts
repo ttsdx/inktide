@@ -165,12 +165,16 @@ export class CelPipeline {
         // the kernel). An icosahedron's 41-degree facet edge measures about 2.8
         // and a deck-to-bulkhead corner about 5.6, while the ocean's remaining
         // ripple detail — it writes a normal already flattened 75% towards up —
-        // peaks around 1.4. 1.7 sits in that gap.
-        uNormalThreshold: { value: 1.7 },
+        // reaches about 2.0 at a crest. Swept in steps against the isolated
+        // mask: at 1.7 the water was still being drawn, by 2.8 the icosahedron's
+        // facet edges were starting to drop out. 2.2 is the middle of that gap.
+        uNormalThreshold: { value: 2.2 },
         // Relative depth *curvature* per pixel. A crease where one surface
         // passes in front of another gives a step of order (gap / distance); a
-        // smooth surface, however steeply it is sloped, gives near zero.
-        uDepthThreshold: { value: 0.02 },
+        // smooth surface, however steeply it is sloped, gives near zero. The
+        // crease stack's 45 cm steps at 6 m measure about 0.11, so 0.075 holds
+        // them with margin while dropping the ocean's self-occluding crests.
+        uDepthThreshold: { value: 0.075 },
         // Curvature this large cannot be a crease — it is one surface ending
         // and another beginning, which the hull shell has already inked.
         uSilhouetteReject: { value: 0.45 },
@@ -195,9 +199,10 @@ export class CelPipeline {
       // The threshold sits above 1 on purpose. Attachment 0 is half-float and
       // holds pre-tonemap values: a lit saturated paint reaches ~1.4 all by
       // itself, so a sub-1 threshold blooms every lit surface in the frame and
-      // every silhouette grows a halo. Only foam, sparks and gate glow should
-      // be over 1.15.
-      { tColor: { value: null }, uThreshold: { value: 1.15 }, uKnee: { value: 0.3 } },
+      // every silhouette grows a halo. A lit paint plus its banded highlight
+      // reaches about 1.7, and blooming that softened the one edge the highlight
+      // exists to have; foam and gate glow run well past 2.
+      { tColor: { value: null }, uThreshold: { value: 1.9 }, uKnee: { value: 0.35 } },
       'BrightExtract',
     );
 
@@ -563,10 +568,15 @@ void main() {
   float silhouette = smoothstep(uSilhouetteReject, uSilhouetteReject * 1.8, relDepth);
   float line = max(nLine, dLine) * (1.0 - silhouette);
 
-  // Fade interior lines out with distance. Beyond ~120 m a crease is thinner
-  // than a pixel and the line is just aliasing noise that crawls when the boat
-  // moves; the hull shells keep drawing the silhouettes out to the horizon.
-  line *= 1.0 - smoothstep(0.02, 0.075, c.w);
+  // Fade interior lines out between 26 m and 46 m (c.w is depth over the 4000 m
+  // far plane). Beyond that a crease is thinner than a pixel, so the line stops
+  // describing a form and becomes aliasing noise that crawls as the boat moves.
+  // Cutting in this close also removes the last of the water: what survives the
+  // curvature test on the ocean is real self-occlusion at wave crests, which no
+  // threshold can distinguish from a hull crease of the same relative size, but
+  // it happens almost entirely in the mid distance. The hull shells keep drawing
+  // silhouettes out to the horizon regardless.
+  line *= 1.0 - smoothstep(0.0065, 0.0115, c.w);
   line = clamp(line * uLineStrength, 0.0, 1.0);
 
   if (uLineMask > 0.5) {

@@ -383,6 +383,7 @@ out float vHeight;
 out float vViewDist;
 out float vDetail;
 out vec4 vClipPos;
+out float vFlatDepth;
 
 void main() {
   // the position attribute is already centred on the camera by the mesh transform, so the
@@ -423,6 +424,29 @@ void main() {
   // must not retune the colour.
   vHeight = clamp(g.position.y / max(uWaveScale, 0.001) * 0.5 + 0.5, 0.0, 1.0);
   vViewDist = dist;
+
+  // The depth handed to the edge pass is measured to the point on the MEAN SEA
+  // PLANE under this vertex, not to the vertex itself.
+  //
+  // The interior-line pass thresholds the second difference of depth, which is
+  // the right measure for finding creases on a hull — a plane of any slope has
+  // zero curvature, so a hull seen edge-on does not line itself. Water is not a
+  // hull. It is curved everywhere by construction, and at a grazing angle a
+  // single pixel spans several metres of a wave face, so its genuine curvature
+  // over one pixel is enormous and the term fires across the whole surface.
+  // Captured at chase-cam height that arrived as a slate-grey wedge lying over
+  // the mid-distance — measurably 30% desaturated, ink washed over water at
+  // roughly 40% coverage — in the middle of a frame that is supposed to be
+  // saturated blue.
+  //
+  // Dropping the wave displacement leaves the depth of a flat plane, whose
+  // curvature is nil, so the water no longer lines against itself at any angle.
+  // Nothing is lost: this attachment's only consumer is that pass, the ocean's
+  // own waterline foam reads the separately copied opaque-pass depth, and the
+  // ridges the lines were nominally finding are already drawn deliberately by
+  // the crest contour, which knows where a crest actually is instead of
+  // inferring it from a depth buffer.
+  vFlatDepth = -(viewMatrix * vec4(xz.x, 0.0, xz.y, 1.0)).z;
 
   vec4 viewPos = viewMatrix * vec4(finalPos, 1.0);
   vClipPos = projectionMatrix * viewPos;
@@ -481,6 +505,7 @@ in float vHeight;
 in float vViewDist;
 in float vDetail;
 in vec4 vClipPos;
+in float vFlatDepth;
 
 float noiseR(vec2 uv) { return texture(uNoise, uv).r; }
 float noiseG(vec2 uv) { return texture(uNoise, uv).g; }
@@ -567,8 +592,30 @@ vec3 rippleOctave(
 vec3 detailWave(vec2 p, float t, float px) {
   float gust = 0.35 + 0.95 * noiseR(p * 0.0062 + vec2(t * 0.0035, -t * 0.0027));
 
-  vec3 a = rippleOctave(p, t, vec2( 0.8607,  0.5091), 11.30, 0.170, 1.00, 0.0, px);
-  vec2 q = p + a.xy * 2.6;
+  // Warp the sampling frame before the FIRST octave, not only between octaves.
+  //
+  // Every octave below is a directional wave train, which is a stripe pattern
+  // by construction. The later ones are broken up by the warp accumulated from
+  // their predecessors, but the first — and the strongest, at more than twice
+  // the amplitude of any other — had nothing in front of it and stayed a clean
+  // set of parallel crests 11 m apart. Under cel banding a clean periodic ridge
+  // is not a subtle artefact the way it would be under smooth shading: every
+  // ridge crosses the same band threshold at the same point in its cycle, so
+  // the thresholds print the period. Seen from directly above, where nothing is
+  // foreshortened, the open ocean came back ruled with even rows of light and
+  // dark dashes — corduroy.
+  //
+  // The warp is nearly a full wavelength of displacement over a ~70 m noise, so
+  // the crest lines wander by more than their own spacing and no two rows stay
+  // in step long enough to read as a texture.
+  vec2 warp = vec2(
+    noiseR(p * 0.0143 + vec2(t * 0.0061, 0.31)),
+    noiseG(p * 0.0143 + vec2(0.17, -t * 0.0048))
+  ) - 0.5;
+  vec2 pw = p + warp * 9.0;
+
+  vec3 a = rippleOctave(pw, t, vec2( 0.8607,  0.5091), 11.30, 0.170, 1.00, 0.0, px);
+  vec2 q = pw + a.xy * 2.6;
   vec3 b = rippleOctave(q, t, vec2(-0.3894,  0.9211),  6.70, 0.145, 1.28, 2.1, px);
   q += b.xy * 1.7;
   vec3 c = rippleOctave(q, t, vec2( 0.6402, -0.7682),  3.90, 0.120, 1.55, 4.3, px);
@@ -702,7 +749,19 @@ void main() {
    * render every wave at the horizon, they paint one flat shape.
    */
   float resolve = 1.0 - smoothstep(0.35, 2.2, px);
-  float detail = min(vDetail, resolve);
+
+  // The detail multiplier gets a far more generous curve than the pre-filter,
+  // although the two were originally one value.
+  //
+  // Sharing the pre-filter's curve conflated two different jobs. The pre-filter
+  // is defending against MSAA averaging high-contrast bands into dirt, and has
+  // to be pessimistic. This term only decides how much ripple, foam and sparkle
+  // to pay for — and each ripple octave already rejects itself the moment its
+  // own wavelength drops below a pixel, so it is not policing aliasing at all.
+  // Handing it the pessimistic curve threw away structure that would have
+  // rendered perfectly well: water twenty metres from a chase camera, the
+  // busiest and most-looked-at part of the frame, came back as plain blue.
+  float detail = min(vDetail, 1.0 - smoothstep(1.1, 4.5, px));
 
   float detailAmt = uDetailStrength * detail;
   vec3 dw = detailWave(p, uTime, px) * detailAmt;
@@ -741,7 +800,7 @@ void main() {
   float formMix = mix(0.40, 1.0, detail);
   float swellW = uBandMix.y + uBandMix.x * (1.0 - formMix);
   float bandBase = vSwell * swellW + vHeight * uBandMix.z;
-  float band = formT * uBandMix.x * formMix + bandBase + dw.z * 0.19;
+  float band = formT * uBandMix.x * formMix + bandBase + dw.z * 0.13;
 
   // The same coordinate with the per-pixel ripple removed. A painted shadow
   // shape is large and simple — the detail lives in the light. Cutting the
@@ -815,11 +874,16 @@ void main() {
   // -----------------------------------------------------------------------
   float rimLo = hardStep(uRimFold.x, vFold);
   float rimHi = hardStep(uRimFold.y, vFold);
-  float crestGate = smoothstep(0.34, 0.72, vSwell);
   // Gated on the swell as well as the fold, or the contour appears on every
-  // ripple in the trough too and the surface fills with cyan confetti.
+  // ripple in the trough too and the surface fills with cyan confetti — which
+  // is precisely what a near-vertical camera showed once the foam was thinned
+  // enough to see past it: the fold window is a level set, so on a surface with
+  // ripples everywhere it closes into hundreds of little cyan rings. Raising
+  // the gate restricts it to water that is genuinely lifted, where the window
+  // lands on the long ridge of a swell and traces it as an open line.
+  float crestGate = smoothstep(0.42, 0.80, vSwell);
   float contour = clamp(rimLo - rimHi, 0.0, 1.0) * detail * crestGate;
-  col = mix(col, uCrest * 1.3, contour * 0.8);
+  col = mix(col, uCrest * 1.3, contour * 0.55);
 
   // -----------------------------------------------------------------------
   // 5. FOAM SOURCE A — CREST FOAM
@@ -843,8 +907,29 @@ void main() {
   // foreshortened away — buried about a third of the frame under white
   // continents. That is stormier than this game ever is, and it destroys the
   // read of the wake, which has to be the brightest thing on the water.
-  float foamGate = smoothstep(0.5, 0.88, vSwell);
-  float crestSignal = vFold * foamGate;
+  float foamGate = smoothstep(0.44, 0.82, vSwell);
+
+  // Foam lives in PATCHES along a crest, not evenly down its whole length.
+  //
+  // A real wave does not break uniformly from end to end; it breaks where it
+  // happens to be steepest, in runs of a few metres, and the rest of the ridge
+  // stays unbroken water. Gating on fold and swell alone gives every crest the
+  // same even sprinkle, and thinning that sprinkle to control the coverage just
+  // dices it finer — the high camera came back speckled with confetti while the
+  // chase camera, which sees only one or two crests, came back with no foam on
+  // them at all. Neither is a coverage problem; both are a *distribution*
+  // problem, and a slow large-scale mask is the fix. Multiplying before the
+  // threshold rather than subtracting after it means the surviving patches keep
+  // their full strength and land as decisive white shapes with clear water
+  // between them, which is how an animator would place them.
+  // The clump scale is set by what one frame can see, not by what looks right
+  // on a map. At a 110 m period a chase camera — which is looking at maybe two
+  // crests — sits entirely inside one clump or entirely outside it, so the
+  // water was either uniformly foamed or, as captured, had none at all. Around
+  // 60 m there is always some of each in shot.
+  float clumpN = noiseR(p * 0.0160 + vec2(uTime * 0.004, -uTime * 0.003));
+  float clump = smoothstep(0.30, 0.62, clumpN);
+  float crestSignal = vFold * foamGate * mix(0.42, 1.70, clump);
 
   // -----------------------------------------------------------------------
   // 6. FOAM SOURCE B — THE PERSISTENT WAKE FIELD
@@ -934,7 +1019,7 @@ void main() {
   // whole silhouette. Never two, because two tones of white on blue is a
   // sticker; the contour is what makes it look drawn.
   // -----------------------------------------------------------------------
-  float foamSignal = max(max(crestSignal * 1.45, wake * 1.35), max(contact, depthFoam));
+  float foamSignal = max(max(crestSignal * 1.55, wake * 1.35), max(contact, depthFoam));
   // Distant foam loses its detail rather than boiling into noise.
   foamSignal *= mix(0.55, 1.0, detail);
 
@@ -1021,7 +1106,6 @@ void main() {
   // triangle to the next.
   vec3 edgeN = mix(vec3(0.0, 1.0, 0.0), normalize(vNormal), 0.1 * detail);
   vec3 viewN = normalize((viewMatrix * vec4(edgeN, 0.0)).xyz);
-  float viewDepth = -(viewMatrix * vec4(vWorldPos, 1.0)).z;
-  outNormalDepth = vec4(viewN * 0.5 + 0.5, clamp(viewDepth / uCameraFar, 0.0, 1.0));
+  outNormalDepth = vec4(viewN * 0.5 + 0.5, clamp(vFlatDepth / uCameraFar, 0.0, 1.0));
 }
 `;

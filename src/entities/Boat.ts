@@ -163,7 +163,7 @@ export class Boat {
     // Ink shells first, because they have to inherit `userData.outline`, then
     // the glow, because it must not get one: an emissive plate with a black
     // outline around it stops reading as light and starts reading as a sticker.
-    this.outlines = outlineHierarchy(this.visual, { widthPx: 2.6 });
+    this.outlines = outlineHierarchy(this.root, { widthPx: 2.6 });
 
     this.glowMaterial = makeGlowMaterial(PALETTE.uiCyan, 0.25, 1);
     this.materials.push(this.glowMaterial);

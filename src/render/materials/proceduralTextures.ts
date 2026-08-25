@@ -121,7 +121,7 @@ export const CEL_BANDS = [0.0, 0.17, 0.46, 0.8] as const;
  * object's shadow converges on the same near-black, which kills the palette.
  * The lit band is above 1 on purpose — see CEL_RAMP_SCALE.
  */
-export const CEL_BAND_SHADE = [0.3, 0.52, 0.82, 1.18] as const;
+export const CEL_BAND_SHADE = [0.24, 0.44, 0.78, 1.22] as const;
 
 /** Per-band pull towards the sky (cool fill) and the sun (warm key). */
 const CEL_BAND_COOL = [0.2, 0.12, 0.03, 0.0] as const;
@@ -211,14 +211,16 @@ export function makeCelMatcap(size = 256): CanvasTexture {
     g.fillRect(0, y0, size, y1 - y0 + 1);
   }
 
-  // One soft sky-catch wedge up-left, agreeing with the sun. Deliberately NOT a
-  // white highlight: the shader's two banded specular shapes own the highlights,
-  // and a third and fourth blob painted into the matcap turned every sphere in
-  // the calibration frame into a bubble with four reflections in it.
-  g.fillStyle = css(desaturate(PALETTE.skyHaze, 0.14, 0.8));
-  g.beginPath();
-  g.ellipse(size * 0.34, size * 0.24, size * 0.2, size * 0.13, -0.5, 0, Math.PI * 2);
-  g.fill();
+  // NO HIGHLIGHT IS PAINTED HERE.
+  //
+  // A bright wedge up-left agreeing with the sun is the obvious thing to paint,
+  // and it was wrong twice over. Canvas fills are antialiased and the texture is
+  // linearly filtered, so its edge arrives soft — and a soft bright blob on a
+  // curved surface is the exact read of a shiny rubber ball, which is what the
+  // calibration sphere came back looking like. It also competes with the two
+  // banded specular shapes the shader draws, giving three or four reflections on
+  // one object. Highlights belong to `celShade`, where their edges are cut by a
+  // threshold and stay hard; this texture supplies value structure and a rim.
 
   // Rim band at the silhouette edge — a fresnel baked into the reflection, so
   // even surfaces with the shader rim turned off still catch their own edge.

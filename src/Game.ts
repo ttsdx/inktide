@@ -737,8 +737,21 @@ export class Game {
       this.harness.step(Math.min(steps, 60 * 600), dt);
     },
 
+    /**
+     * Switch camera mode and settle it immediately.
+     *
+     * The chase cam is a critically-damped spring, so simply setting the mode
+     * leaves it flying in from wherever the previous shot parked it — a capture
+     * three frames later shows the boat forty metres away instead of the
+     * eleven the tuning specifies. Snapping the springs makes a scripted shot
+     * show the camera's steady state, which is what the player actually sees.
+     */
     setCamera: (mode: CameraMode): void => {
       this.rig.mode = mode;
+      if (mode === 'chase' && this.player) {
+        this.syncChaseTarget();
+        this.rig.snapTo(this.chase);
+      }
     },
 
     setFreeCamera: (pos: [number, number, number], target: [number, number, number]): void => {

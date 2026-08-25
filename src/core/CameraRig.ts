@@ -175,12 +175,16 @@ export class CameraRig {
 
       case 'onboard': {
         if (!target) break;
+        // Sat behind and just above the rider's head, not on the bow. Placing
+        // the eye ahead of the cockpit shows nothing but water and throws away
+        // the two things that make a bow camera worth having: the hull pitching
+        // against the horizon, and the rider working in front of you.
         _tmp.copy(target.forward);
         this.camera.position
           .copy(target.position)
-          .addScaledVector(_tmp, 0.4)
-          .addScaledVector(target.up, 2.15);
-        _lookAt.copy(target.position).addScaledVector(_tmp, 22).setY(target.position.y + 1.2);
+          .addScaledVector(_tmp, -1.55)
+          .addScaledVector(target.up, 1.95);
+        _lookAt.copy(target.position).addScaledVector(_tmp, 20).setY(target.position.y + 2.4);
         this.camera.lookAt(_lookAt);
         const speedT = MathUtils.clamp(target.speed / 34, 0, 1.4);
         this.fov += (tu.fovBase + 8 + 18 * speedT * speedT - this.fov) * Math.min(1, 4 * dt);
