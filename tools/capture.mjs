@@ -189,29 +189,53 @@ async function main() {
 
   const results = [];
   let lastTime = 0;
+  /**
+   * Whether a `setup` block has run since the page was last loaded.
+   *
+   * Setup calls are the only part of a shot that persists: input and camera are
+   * rewritten for every frame, and time is monotonic with a reload whenever a
+   * shot seeks backwards. A uniform poked by one shot's setup, though, stays
+   * poked for every shot after it.
+   *
+   * That made a whole series of term-isolation captures uncomparable without
+   * saying so. A floor swept at 0.06, 0.15, 0.5 and 2.0 came back
+   * non-monotonic, with the 0.15 frame returning a colour that could only have
+   * been produced with the debug mode off entirely — because the shot before it
+   * had left different state behind. Any conclusion drawn from those frames was
+   * unfounded, and one of them had already been committed as a fix.
+   *
+   * So: a shot that uses setup gets a clean page. It costs a reload only in the
+   * runs that need it, and the canonical shot list does not.
+   */
+  let dirty = false;
+
+  const reload = async () => {
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(
+      () => Boolean(window.__INKTIDE__ && window.__INKTIDE__.harness.ready()),
+      null,
+      { timeout: args.timeout },
+    );
+    await page.evaluate(() => {
+      document.getElementById('boot')?.remove();
+      window.__INKTIDE__.harness.pause();
+    });
+    lastTime = 0;
+    dirty = false;
+  };
 
   for (const shot of shots) {
+    if (dirty) await reload();
     const started = Date.now();
     process.stdout.write(`  ${shot.id.padEnd(30)} `);
 
     try {
       // Re-seek from zero when a shot needs an earlier moment than the last.
-      if (shot.time < lastTime) {
-        await page.reload({ waitUntil: 'domcontentloaded' });
-        await page.waitForFunction(
-          () => Boolean(window.__INKTIDE__ && window.__INKTIDE__.harness.ready()),
-          null,
-          { timeout: args.timeout },
-        );
-        await page.evaluate(() => {
-          document.getElementById('boot')?.remove();
-          window.__INKTIDE__.harness.pause();
-        });
-        lastTime = 0;
-      }
+      if (shot.time < lastTime) await reload();
 
       await page.evaluate(applyShot, { shot, from: lastTime });
       lastTime = shot.time;
+      if (shot.setup) dirty = true;
 
       // Render a few real frames after the state change: the first compiles any
       // shader variant this angle needs, the rest let camera springs and the
