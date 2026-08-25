@@ -958,7 +958,22 @@ void main() {
   float wake = 0.0;
   float wakeFresh = 0.0;
   if (uWakeParams.w > 0.5) {
-    vec2 wuv = (p - uWakeParams.xy) / (uWakeParams.z * 2.0) + 0.5;
+    // Warp the lookup in world space before sampling, to break the texel grid.
+    //
+    // The field is half a metre per texel, which a chase camera magnifies to
+    // several pixels. Bilinear filtering between texels is piecewise linear, so
+    // the contour of a hard threshold taken across it runs along texel
+    // boundaries — and the wake came back ruled with even rows of blue dashes
+    // through the white, which is the grid itself, drawn. It is the same defect
+    // as the corduroy in the ripple field and it has the same cause: a regular
+    // lattice meeting a hard step.
+    //
+    // Three texels of wander costs one fetch and makes the threshold follow the
+    // noise instead of the lattice, so the wake's edge tears exactly like the
+    // crest foam beside it rather than resolving into rectangles.
+    vec2 jitter = vec2(noiseR(p * 0.21 + vec2(0.13, 0.71)),
+                       noiseG(p * 0.21 + vec2(0.57, 0.29))) - 0.5;
+    vec2 wuv = (p + jitter * 1.6 - uWakeParams.xy) / (uWakeParams.z * 2.0) + 0.5;
     vec2 inside = step(vec2(0.0), wuv) * step(wuv, vec2(1.0));
     vec2 wf = texture(uWakeField, wuv).rg * (inside.x * inside.y);
     // Feather the last few percent of the field so a wake never ends on the

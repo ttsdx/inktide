@@ -199,6 +199,7 @@ const BASE: AIPersonality = {
   // Planning around 16 leaves the AI braking a shade early, which is the right
   // way to be wrong.
   brakeDecel: 16,
+  lateralJerkBudget: 12,
   brakePointScale: 1.0,
   minCornerFraction: 0.42,
   driftCurvature: 0.0085,
@@ -232,6 +233,7 @@ export const AI_AGGRESSIVE: AIPersonality = {
   wanderAmount: 0.03,
   lateralBudget: 17.2,
   brakeDecel: 19,
+  lateralJerkBudget: 15,
   brakePointScale: 0.86,
   minCornerFraction: 0.46,
   driftCurvature: 0.0055,
@@ -269,6 +271,7 @@ export const AI_CLEAN: AIPersonality = {
   // speed it has actually planned for, so it never has to correct.
   lateralBudget: 16.8,
   brakeDecel: 17,
+  lateralJerkBudget: 12.5,
   brakePointScale: 1.06,
   minCornerFraction: 0.46,
   driftCurvature: 0.011,
@@ -306,6 +309,7 @@ export const AI_ERRATIC: AIPersonality = {
   wanderHz: 0.19,
   lateralBudget: 16.4,
   brakeDecel: 17.5,
+  lateralJerkBudget: 13.5,
   brakePointScale: 0.95,
   minCornerFraction: 0.4,
   driftCurvature: 0.007,
@@ -344,6 +348,18 @@ const HORIZON_MIN = 55;
 const HORIZON_SECONDS = 2.6;
 /** Samples in the braking scan. */
 const HORIZON_SAMPLES = 14;
+/**
+ * Distance within which the lateral-jerk limit is treated as a hard speed
+ * ceiling rather than something to brake for. Roughly a second of travel: close
+ * enough that the direction change is happening now.
+ */
+const JERK_CEILING_DISTANCE = 34;
+/**
+ * Curvature reversal rate, 1/m per m, above which the AI refuses to commit to a
+ * slide. Tuned to sit below the Chicane Flick's reversal and above the ramp into
+ * an ordinary corner, so the hairpin and the sweeper still get drifted.
+ */
+const DRIFT_TWIST_LIMIT = 3.2e-4;
 
 /**
  * How hard the lookahead collapses when the boat is outside the corridor.
@@ -811,12 +827,42 @@ export class AIController {
     let brake = 0;
     let targetSpeed = topSpeed * Math.min(1, pace);
     let worstCurvature = 0;
+    // Largest curvature reversal rate found in the horizon, and how far away it
+    // is. Used both for the jerk limit and to decide against drifting into an
+    // S-bend.
+    let worstTwist = 0;
+    const step = horizon / HORIZON_SAMPLES;
+    let prevSigned = this.course.signedCurvatureAt(t);
 
     for (let i = 1; i <= HORIZON_SAMPLES; i++) {
-      const distance = (horizon * i) / HORIZON_SAMPLES;
+      const distance = step * i;
       const sampleT = this.course.advance(t, distance);
-      const k = Math.abs(this.course.signedCurvatureAt(sampleT));
+      const signed = this.course.signedCurvatureAt(sampleT);
+      const k = Math.abs(signed);
       if (k > worstCurvature) worstCurvature = k;
+
+      // dkappa/ds across this step. A sign change contributes the sum of the two
+      // magnitudes, which is exactly the extra cost of an S-bend.
+      const twist = Math.abs(signed - prevSigned) / step;
+      prevSigned = signed;
+      if (twist > worstTwist) worstTwist = twist;
+
+      // Speed at which this rate of direction change is affordable. Braked for
+      // like a corner when it is still far off, and held as a ceiling once it is
+      // close enough to be the thing under the hull.
+      if (twist > 1e-6) {
+        const jerkSpeed = Math.max(floor, Math.cbrt((P.lateralJerkBudget * pace) / twist));
+        if (jerkSpeed < speed) {
+          const needed =
+            ((speed * speed - jerkSpeed * jerkSpeed) / (2 * decel)) * P.brakePointScale;
+          if (distance <= needed) {
+            brake = Math.max(brake, clamp((needed - distance) / Math.max(needed, 1) + 0.2, 0, 1));
+            targetSpeed = Math.min(targetSpeed, jerkSpeed);
+          }
+        }
+        if (distance <= JERK_CEILING_DISTANCE) targetSpeed = Math.min(targetSpeed, jerkSpeed);
+      }
+
       if (k < 1e-5) continue;
 
       const cornerSpeed = Math.max(floor, Math.sqrt(latBudget / k));
@@ -873,7 +919,13 @@ export class AIController {
     // Hold the slide through anything tighter than the personality's threshold,
     // but only once actually moving: initiating a drift from a standstill just
     // scrubs speed.
+    // A drift commits the hull to sliding one way. Into an S-bend that is
+    // exactly wrong: the slide has to be unwound before the second element can
+    // be turned into, and at chicane speeds there is not enough road to do it.
+    // So the drift is gated on the corner being a sustained one.
+    const twisting = worstTwist > DRIFT_TWIST_LIMIT;
     let wantDrift =
+      !twisting &&
       speed > topSpeed * 0.34 &&
       (worstCurvature > P.driftCurvature || Math.abs(kAhead) > P.driftCurvature);
     // Recovering from a spin, the slide is the fastest way to rotate: unsticking

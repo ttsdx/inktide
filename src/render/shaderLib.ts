@@ -169,10 +169,21 @@ vec3 celShade(CelInput s) {
   // light that is a different COLOUR, which is what a painter does and what no
   // amount of threshold tuning can substitute for. Both terms are deliberately
   // concentrated at the extremes so the base band stays pure paint.
+  //
+  // Both terms scale with the paint's own brightness. A near-white surface can
+  // absorb a lot of sky in its shadow and still read as white — and *must*, or
+  // it renders as neutral grey, which is how the calibration icosahedron came
+  // back looking like brushed metal for three rounds. A dark paint cannot: the
+  // same absolute amount of blue would be most of its shadow value and the
+  // object would change colour rather than gain a light source. Scaling by
+  // albedo is also what actually happens on a real surface, which is a rare case
+  // of the physical answer and the painter's answer agreeing.
   float rampL = clamp(luma(ramp) / RAMP_SCALE, 0.0, 1.0);
+  float albedoL = luma(s.baseColor);
   float shadowFill = 1.0 - smoothstep(0.10, 0.70, rampL);
   float keyFill = smoothstep(0.78, 1.0, rampL);
-  diffuse += SKY_COLOR * shadowFill * uSkyFill + SUN_COLOR * keyFill * uKeyFill;
+  diffuse += SKY_COLOR * shadowFill * uSkyFill * (0.35 + 1.5 * albedoL)
+           + SUN_COLOR * keyFill * uKeyFill * (0.45 + 1.1 * albedoL);
 
   // --- 2. banded specular ------------------------------------------------
   // Two independent highlight SHAPES, not one lobe with a hard edge.
@@ -267,16 +278,18 @@ vec3 celShade(CelInput s) {
 
   // The sky rim traces the shadow-side edge in cool light. Its job is purely
   // separation: without it a dark hull silhouetted against dark water loses its
-  // contour the moment the ink line is thinner than a pixel.
-  float skyRim = bandStep(uRimWidth + 0.12, fres, uShadeSoftness * 2.2)
+  // contour the moment the ink line is thinner than a pixel. It is the WIDER of
+  // the two — separation is the job that has to survive at distance.
+  float skyRim = bandStep(uRimWidth * 0.78, fres, uShadeSoftness * 2.2)
                * (1.0 - smoothstep(-0.20, 0.45, ndl))
                * mix(0.40, 1.0, clamp(N.y * 0.5 + 0.5, 0.0, 1.0));
 
-  // The key rim is tinted by the paint for the same reason the specular is: a
-  // pure sun-coloured rim at any useful strength renders as a white glow, the
+  // The key rim is tinted towards the paint for the same reason the specular is:
+  // a pure sun-coloured rim at any useful strength renders as a white glow, the
   // bright extract picks it up, and the bloom turns every silhouette into a
   // halo. Tinted, it reads as ink-adjacent light on a coloured surface.
-  vec3 rimLight = specTint * keyRim * uKeyRimStrength
+  vec3 keyRimTint = SUN_COLOR * (0.45 + 0.85 * s.baseColor);
+  vec3 rimLight = keyRimTint * keyRim * uKeyRimStrength
                 + uRimColor * skyRim * uRimStrength;
 
   return diffuse + specular + rimLight;
@@ -315,15 +328,21 @@ export function celUniformDefaults() {
   return {
     uRimColor: { value: PALETTE.skyHaze.clone() },
     // Rim geometry: fres = (1 - N·V)^uRimPower, thresholded at uRimWidth.
-    // 2.0 / 0.42 puts the rim's inner edge at ~63 degrees off the normal, which
-    // is a band about a tenth of a sphere's radius wide — thick enough to
-    // survive a 1x capture, thin enough to still read as an edge and not a glow.
+    //
+    // THE RIM MUST BE WIDER THAN THE INK. At the shipped 0.5 the band fired only
+    // where N·V < 0.29, i.e. beyond 73 degrees off the normal — the outer 4% of
+    // a sphere's radius, about 2 px on the calibration sphere. The inverted-hull
+    // ink band is 2 px. The rim was therefore drawn entirely *underneath* the
+    // outline on every object in every capture, which is why probe-05-backlit
+    // showed four backlit shapes and not one rim: the term was working and
+    // invisible. 0.30 puts the inner edge at 62 degrees, an 11%-of-radius band
+    // that clears the ink with room to read as light.
     uRimPower: { value: 2.0 },
-    uRimWidth: { value: 0.5 },
+    uRimWidth: { value: 0.3 },
     /** Cool sky rim on the shadow side: separation from the water behind. */
-    uRimStrength: { value: 0.6 },
+    uRimStrength: { value: 0.85 },
     /** Warm key rim on the sun side: the term that makes a shape read as drawn. */
-    uKeyRimStrength: { value: 0.45 },
+    uKeyRimStrength: { value: 0.6 },
     uSpecStrength: { value: 0.9 },
     uSpecSize: { value: 0.5 },
     /** Depth of the matcap's value modulation, centred so 0.5 grey is neutral. */

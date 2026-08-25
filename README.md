@@ -39,6 +39,11 @@ cash it in on the exit.
 | `npm run preview` | Serve the production bundle |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run shots` | Capture the verification screenshot set (see below) |
+| `npm run probe:handling` | Measure top speed, turn times, drift, airtime |
+| `npm run probe:race` | Simulate a full three-lap race headlessly |
+| `npm run probe:course` | Circuit geometry, swell alignment, curvature spread |
+| `npm run probe:sea` | Sweep wave height against time spent airborne |
+| `npm run probe:perf` | Triangle and draw-call accounting |
 
 ## Architecture
 
@@ -175,6 +180,30 @@ The shot list is deliberately adversarial: it includes the angles where each
 subsystem is most likely to look wrong — grazing water, straight into the sun,
 a boat at 95 m, a silhouette against bright sky — rather than only the
 flattering hero angles.
+
+Additional shot lists live alongside it and are selected with `--shotfile`:
+`probeShots.mjs` (cel calibration primitives), `boatShots.mjs`, `riderShots.mjs`
+and `hudShots.mjs`.
+
+## The headless probes
+
+Screenshots verify how the game *looks*. They cannot verify how it *drives*, and
+several of the worst bugs in this project were invisible in a frame:
+
+- Top speed was 1.6 m/s instead of 34, because thrust wetness was sampled at the
+  intake point, which sits at the design waterline by definition.
+- The buoyancy spring was generating twelve times the boat's weight off a crest
+  and throwing it 13 m into the air.
+- Boats were airborne 47% of a race. A sea-state sweep proved the swell was not
+  the cause — reducing it barely moved the number, and driving *along* the swell
+  was airborne more than driving across it. The hull was floating so shallow
+  that planing lift left it skipping off ripples.
+- `AI_PRESETS` is indexed by boat id, and an off-by-one meant the erratic racer
+  was never instantiated.
+
+Each probe runs the real code — real physics against the real wave field, the
+real AI against the real director — and prints measured numbers against stated
+targets. They take a few seconds and need no GPU.
 
 ## Licence
 

@@ -178,6 +178,12 @@ export class CelPipeline {
         // Curvature this large cannot be a crease — it is one surface ending
         // and another beginning, which the hull shell has already inked.
         uSilhouetteReject: { value: 0.45 },
+        // Relative screen-space depth slope above which the normal term is
+        // treated as a raking surface rather than a crease. Swept live against
+        // the isolated mask: at 0.16 the water still showed strokes near the
+        // horizon, at 0.05 the crease stack's own decks started thinning where
+        // they turn away. 0.09 is the middle of the usable gap.
+        uGrazeReject: { value: 0.09 },
         uLineStrength: { value: 0.95 },
         uInk: { value: PALETTE.ink.clone() },
         uCameraFar: { value: 4000 },
@@ -466,6 +472,7 @@ uniform vec2 uTexel;
 uniform float uNormalThreshold;
 uniform float uDepthThreshold;
 uniform float uSilhouetteReject;
+uniform float uGrazeReject;
 uniform float uLineStrength;
 uniform float uScale;
 uniform float uLineMask;
@@ -566,6 +573,34 @@ void main() {
   // already inked them.
   float faceOn = abs(decodeNormal(c).z);
   nLine *= smoothstep(0.04, 0.22, faceOn);
+
+  // --- grazing-surface reject, measured from DEPTH, not from the normal ---
+  //
+  // The faceOn gate above cannot see the ocean, and the isolated line mask
+  // proves it: the water carried long heavy strokes across the whole mid
+  // distance while every hull crease behaved. The reason is that the ocean
+  // deliberately writes a normal flattened most of the way towards world up, so
+  // its *stored* normal claims to be face-on while its actual geometry is
+  // grazing enough that one pixel spans metres of surface. Over that footprint
+  // the un-flattened ripple detail folds many wavelengths into a couple of
+  // pixels and the normal Sobel saturates — a real gradient, on real geometry,
+  // that no threshold on the gradient itself can separate from a crease.
+  //
+  // The screen-space depth SLOPE does see it, because slope is a property of the
+  // geometry rather than of the shading normal. Relative to depth it is scale
+  // invariant: a face-on surface at any distance measures near zero (the crease
+  // stack's decks come in around 0.01), a surface raked far enough that a pixel
+  // covers a significant fraction of its own distance measures two orders of
+  // magnitude higher (mid-distance water, 0.2 and up). Suppressing the normal
+  // term across that gap removes the water without touching a single crease.
+  //
+  // The depth term is deliberately left alone: a genuine crease seen at a
+  // grazing angle — the deck line of a boat viewed from astern — still needs its
+  // line, and the curvature measure was already immune to slope.
+  float gxD = tl.w + 2.0 * l.w + bl.w - tr.w - 2.0 * r.w - br.w;
+  float gyD = tl.w + 2.0 * u.w + tr.w - bl.w - 2.0 * d.w - br.w;
+  float relSlope = sqrt(gxD * gxD + gyD * gyD) / max(c.w, 1e-5);
+  nLine *= 1.0 - smoothstep(uGrazeReject, uGrazeReject * 2.6, relSlope);
 
   // A relative step this large is a silhouette, not a crease.
   float silhouette = smoothstep(uSilhouetteReject, uSilhouetteReject * 1.8, relDepth);

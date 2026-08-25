@@ -9,7 +9,12 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 43118",
     "typecheck": "tsc --noEmit",
-    "shots": "node tools/capture.mjs"
+    "shots": "node tools/capture.mjs",
+    "probe:handling": "tsx tools/physicsProbe.ts",
+    "probe:race": "tsx tools/raceProbe.ts",
+    "probe:course": "tsx tools/courseProbe.ts",
+    "probe:sea": "tsx tools/seaStateSweep.ts",
+    "probe:perf": "tsx tools/perfProbe.ts"
   },
   "dependencies": {
     "three": "^0.185.1"
