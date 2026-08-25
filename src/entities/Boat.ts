@@ -74,6 +74,7 @@ export class Boat {
   readonly spec: BoatSpec;
 
   private readonly visual: Group;
+  private readonly barPivot: Object3D;
   private readonly rudder: Object3D;
   private readonly glow: Mesh;
   private readonly glowMaterial: CelMaterial;
@@ -139,7 +140,19 @@ export class Boat {
     const fine = { outline: { widthPx: 3.4 } };
     this.part(buildFinGeometry(), paint, this.visual, 'fin', fine);
     this.part(buildEngineGeometry(), trim, this.visual, 'engine', fine);
-    this.part(buildHandlebarGeometry(), trim, this.visual, 'handlebar', fine);
+    // The handlebar hangs off a pivot on its own steering axis so it can be
+    // turned. It used to be parented straight to the hull at a fixed transform
+    // and never moved, while the rider's hands swung up to 5 cm fore and aft
+    // with the lean — so in every turn the rider was working an imaginary bar
+    // and visibly missing the real one. The geometry is authored in hull space,
+    // so the mesh is offset back by the pivot to leave its rest position
+    // exactly where it was.
+    this.barPivot = new Object3D();
+    this.barPivot.name = 'handlebarPivot';
+    this.barPivot.position.set(0, HANDLEBAR_POINT.y, HANDLEBAR_POINT.z);
+    this.visual.add(this.barPivot);
+    const bars = this.part(buildHandlebarGeometry(), trim, this.barPivot, 'handlebar', fine);
+    bars.position.set(0, -HANDLEBAR_POINT.y, -HANDLEBAR_POINT.z);
 
     // The rudder is authored about its own pivot, so the pivot object carries
     // the position and the mesh sits at its origin. That is the whole reason
@@ -224,6 +237,15 @@ export class Boat {
    */
   setBoosting(active: boolean): void {
     this.boostOverride = active;
+  }
+
+  /**
+   * Turn the handlebar. Driven from `Rider.barYaw`, which is the same signal
+   * the rider's hand IK targets are rotated by, so the grips and the hands move
+   * as one object.
+   */
+  setBarYaw(radians: number): void {
+    this.barPivot.rotation.y = radians;
   }
 
   applyState(state: BoatState, dt: number): void {

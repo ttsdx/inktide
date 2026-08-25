@@ -53,6 +53,31 @@ export const HIP_HEIGHT = 0.74;
  */
 export const GRIP = Object.freeze({ x: 0.212, y: 1.02, z: 0.545 });
 
+/**
+ * Radians of bar-assembly yaw per unit of rider lean.
+ *
+ * A rider steering into a turn pulls the inside grip back and pushes the
+ * outside one forward, which is a rotation of the whole bar about its steering
+ * stem. `Rider` rotates its hand IK targets by this, and `Boat` rotates the
+ * modelled handlebar by the same amount from the same signal — that is the only
+ * reason the hands stay on the bars.
+ *
+ * They used to disagree. The rider displaced its grip targets along Z by up to
+ * 55 mm per hand while the boat's handlebar mesh was parented to the hull at a
+ * fixed transform and never moved at all, so in any turn the rider was steering
+ * an imaginary bar and its hands hung up to 5 cm off the modelled one. A probe
+ * measuring hand-to-grip distance found 0.0 cm at rest and 5.0 cm mid-drift,
+ * which is exactly the shape of a fault that only exists while turning and so
+ * never shows up in a static test.
+ *
+ * 0.262 rad is 15 degrees, which is what 55 mm of throw subtends at the grips'
+ * 212 mm half-span.
+ */
+export const BAR_YAW_PER_LEAN = 0.262;
+
+/** The bar's steering axis in rider-root space: on the centreline, at the grips. */
+export const BAR_PIVOT = Object.freeze({ y: GRIP.y, z: GRIP.z });
+
 interface BoneSpec {
   name: string;
   parent: string | null;

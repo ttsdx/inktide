@@ -6,7 +6,15 @@ import { LAYER_OPAQUE } from '../render/layers.ts';
 import { CelMaterial } from '../render/materials/CelMaterial.ts';
 import type { CelMaterialOptions } from '../render/materials/CelMaterial.ts';
 import { outlineHierarchy } from '../render/OutlineHull.ts';
-import { GRIP, HIP_HEIGHT, RiderRig, SIDE_LEFT, SIDE_RIGHT } from './RiderRig.ts';
+import {
+  BAR_PIVOT,
+  BAR_YAW_PER_LEAN,
+  GRIP,
+  HIP_HEIGHT,
+  RiderRig,
+  SIDE_LEFT,
+  SIDE_RIGHT,
+} from './RiderRig.ts';
 import {
   buildAbdomen,
   buildBoot,
@@ -233,6 +241,15 @@ export class Rider {
   /** Parent this to `Boat.riderMount`. */
   readonly root: Group;
   readonly rig: RiderRig;
+
+  /**
+   * How far the rider has turned the bars this frame, in radians.
+   *
+   * Published because the handlebar is the boat's geometry, not the rider's,
+   * and the two have to rotate together or the hands come off it. `Game` reads
+   * this straight into `Boat.setBarYaw`.
+   */
+  barYaw = 0;
 
   private readonly colorIndex: number;
   private readonly geometries: BufferGeometry[] = [];
@@ -571,6 +588,10 @@ export class Rider {
     const life = 1 - 0.45 * inten;
     const bob = Math.sin(pose.bobPhase);
 
+    // Published before the arms are solved, because `solveArms` reads it and so
+    // does the boat's handlebar.
+    this.barYaw = -lean * BAR_YAW_PER_LEAN;
+
     // --- hips --------------------------------------------------------------
     let hipX = -lean * 0.045;
     let hipY = -sag * 0.055 + bob * 0.013 * (0.45 + 0.55 * thr) - crouch * 0.145 - inten * 0.025;
@@ -703,10 +724,23 @@ export class Rider {
 
       // Bar assembly yaw: the grip on the inside of the turn comes back and
       // drops, the outside grip pushes forward and rises.
+      //
+      // Expressed as an actual rotation of the grip about the bar's steering
+      // axis rather than as three independent offsets. The offsets were an
+      // approximation of the same motion, and because `Boat` has to apply the
+      // identical rotation to the modelled handlebar for the hands to stay on
+      // it, an approximation on one side and a rotation on the other would
+      // guarantee a gap. Both now go through `BAR_YAW_PER_LEAN`.
+      const yaw = this.barYaw;
+      const cy = Math.cos(yaw);
+      const sy = Math.sin(yaw);
+      const gx = s * GRIP.x;
       _ikTarget.set(
-        s * GRIP.x + lean * 0.006,
+        gx * cy + (GRIP.z - BAR_PIVOT.z) * sy,
+        // The inside grip also drops a little as it comes back, which is the
+        // bar following the rider's shoulder rather than staying level.
         GRIP.y + s * lean * 0.012,
-        GRIP.z + s * lean * 0.055,
+        BAR_PIVOT.z - gx * sy + (GRIP.z - BAR_PIVOT.z) * cy,
       );
       // Continuous working motion. The throttle hand gets the larger share
       // because it is the one blipping the trigger; the other is bracing.

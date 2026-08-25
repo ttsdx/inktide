@@ -457,6 +457,9 @@ export class Game {
 
       r.pose = Rider.poseFromBoat(s, r.pose, dt, r.celebrate);
       r.rider.update(r.pose, ctx);
+      // The bars belong to the boat and the hands belong to the rider, so the
+      // one signal that turns both has to be handed across here.
+      r.boat.setBarYaw(r.rider.barYaw);
 
       if (!s.airborne) {
         this.emitters.push({
