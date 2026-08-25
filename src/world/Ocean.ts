@@ -1260,7 +1260,21 @@ void main() {
   // foamed water flattens towards pale foam and clear water flattens towards
   // saturated blue, and neither of them flattens towards the average of the
   // two, which is the only colour on that line nobody wants.
-  vec3 flatTone = mix(mix(uMid, uShallow, 0.55), uFoamShade, clamp(foamSignal * 1.3, 0.0, 1.0));
+  // Quantised, for the same reason the foam above it is.
+  //
+  // This term is a continuous function of foamSignal, and it DOMINATES the most
+  // grazing pixels — which at chase-camera height is most of the frame. So no
+  // matter how hard the bands above are cut, the mid-ground was being repainted
+  // as a smooth wash by the thing meant to be anti-aliasing it. Measured on a
+  // wake crop, banding the foam alone took the region from 1805 distinct
+  // colours to 884; it was still a gradient, and this was why.
+  //
+  // Stepping it does not bring the aliasing back. The aliasing the pre-filter
+  // exists for comes from the chop's high-frequency banding crossing a
+  // threshold faster than a pixel; foamSignal at a large pixel footprint is a
+  // slow field, so its steps are large, stable shapes rather than a shimmer.
+  float flatFoam = clamp(foamSignal * 1.3, 0.0, 0.999);
+  vec3 flatTone = mix(mix(uMid, uShallow, 0.55), uFoamShade, floor(flatFoam * 3.0) / 2.0);
   // The pre-filter target has to carry the fresnel lift too, or it undoes it.
   //
   // The most grazing pixels in the frame are exactly the ones the pre-filter
