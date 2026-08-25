@@ -41,6 +41,28 @@ const measure = async (label, apply) => {
     ({ label, apply }) => {
       const g = window.__INKTIDE__;
       const u = g.ocean.material.uniforms;
+
+      // Snapshot the shipped values once, and restore them before every
+      // variant. Without this each measurement is taken on top of every
+      // previous one, so a sweep of four separate uniforms reports the effect
+      // of four accumulated changes and none of the rows can be compared —
+      // which is exactly what the first run of this sweep did.
+      if (!window.__TONE_BASE__) {
+        const base = {};
+        for (const [k, v] of Object.entries(u)) {
+          const val = v.value;
+          if (typeof val === 'number') base[k] = val;
+          else if (val && val.isVector3) base[k] = { x: val.x, y: val.y, z: val.z };
+          else if (val && val.isVector2) base[k] = { x: val.x, y: val.y };
+        }
+        window.__TONE_BASE__ = base;
+      }
+      for (const [k, v] of Object.entries(window.__TONE_BASE__)) {
+        if (!u[k]) continue;
+        if (typeof v === 'number') u[k].value = v;
+        else if (u[k].value.isVector3) u[k].value.set(v.x, v.y, v.z);
+        else if (u[k].value.isVector2) u[k].value.set(v.x, v.y);
+      }
       // Water-only camera, far from the grid so no boats or foam decals.
       g.harness.step(Math.max(0, Math.round((12 - g.harness.stats().elapsed) * 60)), 1 / 60, false);
       g.harness.setFreeCamera([600, 5.2, 600], [600, 0.5, 545]);
@@ -48,7 +70,13 @@ const measure = async (label, apply) => {
         for (const [k, v] of Object.entries(apply)) {
           if (k.startsWith('post:')) {
             g.harness.setPassUniform('composite', k.slice(5), v);
-          } else if (u[k]) {
+          } else if (!u[k]) {
+            // Loudly, rather than silently skipping. Five uniforms were
+            // declared in the shader and never defined, and because this loop
+            // quietly ignored anything it could not find, every sweep of them
+            // reported that changing them made no difference.
+            throw new Error(`waterToneProbe: no uniform named ${k}`);
+          } else {
             if (v && typeof v === 'object' && u[k].value && u[k].value.isVector3) {
               u[k].value.set(v.x, v.y, v.z);
             } else {
@@ -150,12 +178,21 @@ rows.push(await measure('baseline (shipped)', null));
 // the deepest band too: the near field ends up owning one tone and reads as a
 // flat mass however wide its histogram is. Sweep back down with band AREA in
 // the scoring this time.
-rows.push(await measure('0.62/0.79/0.92', bands(0.62, 0.79, 0.92)));
-rows.push(await measure('0.64/0.81/0.93', bands(0.64, 0.81, 0.93)));
-rows.push(await measure('0.64/0.78/0.90', bands(0.64, 0.78, 0.90)));
-rows.push(await measure('0.64/0.84/0.95', bands(0.64, 0.84, 0.95)));
-rows.push(await measure('0.66/0.83/0.94', bands(0.66, 0.83, 0.94)));
-rows.push(await measure('0.68/0.82/0.92', bands(0.68, 0.82, 0.92)));
+// The five uniforms below were declared in the shader and never defined, so
+// they sat at zero and every earlier sweep of them silently did nothing — this
+// probe only writes a uniform that already exists. Now that they are real, the
+// values they were given are still only reasoned guesses, so sweep them.
+rows.push(await measure('lift 0.0', { uLiftStrength: 0.0 }));
+rows.push(await measure('lift 0.5', { uLiftStrength: 0.5 }));
+rows.push(await measure('lift 1.0', { uLiftStrength: 1.0 }));
+rows.push(await measure('sunPlane 0.0', { uSunPlaneStrength: 0.0 }));
+rows.push(await measure('sunPlane 0.6', { uSunPlaneStrength: 0.6 }));
+rows.push(await measure('sunPlane 1.0', { uSunPlaneStrength: 1.0 }));
+rows.push(await measure('preFilterFloor 0.0', { uPreFilterFloor: 0.0 }));
+rows.push(await measure('preFilterFloor 0.25', { uPreFilterFloor: 0.25 }));
+rows.push(await measure('preFilterFloor 0.5', { uPreFilterFloor: 0.5 }));
+rows.push(await measure('deepLift 0.1', { uDeepLift: 0.1 }));
+rows.push(await measure('deepLift 0.3', { uDeepLift: 0.3 }));
 
 console.log('\nWATER TONE AND BAND AREA  (water-02 framing)');
 console.log('  variant                p02    p50    p98    range  nearRange  nearTop  nearBands  meanSat');

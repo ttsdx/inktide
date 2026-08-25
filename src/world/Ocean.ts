@@ -165,11 +165,16 @@ export class Ocean {
          */
         uFormRange: { value: new Vector2(0.45, 0.78) },
         /** How far the deepest band is lifted towards the mid blue. */
-        uDeepLift: { value: 0.2 },
+        uDeepLift: { value: 0.1 },
         uSunPlaneStrength: { value: 1.0 },
-        uLiftStrength: { value: 1.0 },
-        /** Banded colour that survives where a pixel cannot resolve the bands. */
-        uPreFilterFloor: { value: 0.25 },
+        uLiftStrength: { value: 0.5 },
+        /**
+         * How much banded colour survives where a pixel cannot resolve the
+         * bands. Zero measured best on band area, and the reason a floor was
+         * wanted in the first place — keeping some structure in the far field
+         * — is now served by the flat tone itself being stepped.
+         */
+        uPreFilterFloor: { value: 0.0 },
 
         /** Floor on band-edge width, in band units. Anti-aliasing does the rest. */
         uBandSoftness: { value: 0.004 },
