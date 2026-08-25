@@ -41,32 +41,36 @@ const gate = (index, yaw, pitch, distance, lookHeight = 0) => ({
 export const SHOTS = [
   // Four different buoys at four different times, so the sample covers a float
   // near a crest, a float in a trough and two in between.
+  //
+  // `lookHeight` is kept near zero on purpose: the contact between the float
+  // and the water is the subject, and framing it from even three metres up
+  // hides the exact thing the shot exists to show.
   {
     id: 'float-buoy-a',
     group: 'buoy',
     time: 6.0,
-    camera: buoy(8, 0.6, 0.05, 4.2, 0.35),
-    description: 'Buoy at near-eye level, 4 m. The collar must cut the surface.',
+    camera: buoy(8, 0.6, 0.03, 2.6, 0.18),
+    description: 'Buoy at eye level, 2.6 m. The collar must cut the surface.',
   },
   {
     id: 'float-buoy-b',
     group: 'buoy',
     time: 11.0,
-    camera: buoy(9, 2.1, 0.02, 3.4, 0.3),
-    description: 'A second buoy, opposite side, lower still.',
+    camera: buoy(9, 2.1, 0.0, 2.2, 0.12),
+    description: 'A second buoy, opposite side, dead level with the water.',
   },
   {
     id: 'float-buoy-c',
     group: 'buoy',
     time: 17.0,
-    camera: buoy(30, 1.2, -0.04, 3.0, 0.5),
-    description: 'Below the collar looking slightly up. Exposes any hover gap.',
+    camera: buoy(30, 1.2, -0.05, 2.4, 0.1),
+    description: 'From just below the collar. Any hover gap is unmissable here.',
   },
   {
     id: 'float-buoy-d',
     group: 'buoy',
     time: 23.0,
-    camera: buoy(31, 4.0, 0.1, 5.5, 0.4),
+    camera: buoy(31, 4.0, 0.06, 4.0, 0.25),
     description: 'Wider, so the buoy is read against the swell it sits in.',
   },
 
@@ -76,15 +80,22 @@ export const SHOTS = [
     id: 'float-gate-a',
     group: 'gate',
     time: 8.0,
-    camera: gate(1, 0.9, 0.06, 9.0, 1.0),
-    description: 'Gate pylon collar at 9 m, near sea level.',
+    camera: gate(1, 0.9, 0.03, 6.5, 0.4),
+    description: 'Gate pylon collar at 6.5 m, near sea level.',
   },
   {
     id: 'float-gate-b',
     group: 'gate',
     time: 14.0,
-    camera: gate(4, 2.6, 0.03, 7.0, 0.8),
+    camera: gate(4, 2.6, 0.0, 5.0, 0.3),
     description: 'A different gate, tighter, from the other side.',
+  },
+  {
+    id: 'float-gate-under',
+    group: 'gate',
+    time: 17.0,
+    camera: gate(2, 1.4, 0.55, 16.0, 2.0),
+    description: 'Looking up at the arch from under it. The black-slab test.',
   },
   {
     id: 'float-gate-c',
