@@ -603,17 +603,24 @@ export class BoatPhysics implements BoatState {
     if (effects) {
       for (const p of SPRAY_POINTS) {
         this.localToWorld(p, _tmp);
+        // Upward velocity is deliberately modest. An earlier build threw
+        // droplets at up to 11 m/s, which under gravity is a six metre arc,
+        // and with a 1.5 s life they hung there: a captured frame showed forty
+        // ink-outlined blobs scattered across the sky well above the horizon,
+        // reading as cartoon smoke puffs rather than water. Spray off a hull
+        // belongs in the metre or two above the surface, and it should be gone
+        // before the boat has travelled its own length.
         effects.spray({
           position: _tmp.clone(),
           velocity: new Vector3(
-            this.velocity.x * 0.28 + (this.rng() - 0.5) * 4,
-            2.6 + strength * 8.5,
-            this.velocity.z * 0.28 + (this.rng() - 0.5) * 4,
+            this.velocity.x * 0.30 + (this.rng() - 0.5) * 3,
+            1.7 + strength * 4.0,
+            this.velocity.z * 0.30 + (this.rng() - 0.5) * 3,
           ),
-          count: Math.round(14 + strength * 46),
-          spread: 1.1 + strength * 2.4,
-          size: 0.20 + strength * 0.24,
-          life: 0.75 + strength * 0.8,
+          count: Math.round(10 + strength * 30),
+          spread: 0.8 + strength * 1.5,
+          size: 0.12 + strength * 0.13,
+          life: 0.42 + strength * 0.40,
         });
       }
     }
@@ -647,14 +654,14 @@ export class BoatPhysics implements BoatState {
     effects.spray({
       position: _tmp.clone(),
       velocity: new Vector3(
-        this.velocity.x * 0.22 + this.right.x * side * (1.5 + slide * 5.5),
-        1.4 + intensity * 3.2,
-        this.velocity.z * 0.22 + this.right.z * side * (1.5 + slide * 5.5),
+        this.velocity.x * 0.22 + this.right.x * side * (1.5 + slide * 5.0),
+        1.0 + intensity * 1.9,
+        this.velocity.z * 0.22 + this.right.z * side * (1.5 + slide * 5.0),
       ),
-      count: Math.round(3 + intensity * 12),
-      spread: 0.5 + slide * 1.3,
-      size: 0.13 + intensity * 0.12,
-      life: 0.45 + intensity * 0.4,
+      count: Math.round(3 + intensity * 10),
+      spread: 0.45 + slide * 1.1,
+      size: 0.09 + intensity * 0.08,
+      life: 0.30 + intensity * 0.26,
     });
   }
 
