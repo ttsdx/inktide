@@ -2,6 +2,7 @@ import type { BoatState, FrameContext, RacePhase, RacerProgress } from '../contr
 import { CSS } from '../core/Palette.ts';
 import { Minimap, type MinimapBlip, type MinimapGate, type MinimapPoint } from './Minimap.ts';
 import {
+  approach,
   clamp,
   clamp01,
   chevron,
@@ -10,7 +11,6 @@ import {
   formatTime,
   hatch,
   measureText,
-  needle,
   ordinalSuffix,
   panel,
   panelPath,
@@ -20,6 +20,7 @@ import {
   segmentedArc,
   segmentedBar,
   Spring1,
+  triangle,
   type Ctx2D,
 } from './hudPrimitives.ts';
 
@@ -138,14 +139,15 @@ export class Hud {
 
   /**
    * Speed shown by the gauge. Underdamped, so a throttle stab overshoots and
-   * settles: the needle has to feel like it has mass, otherwise it is just the
-   * physics number reprinted at 60 Hz.
+   * settles: the instrument has to feel like it has a mass on the end of it,
+   * otherwise it is just the physics number reprinted at 60 Hz. It also means
+   * the digits keep moving for a moment after a collision, which reads as the
+   * boat losing speed rather than the number being edited.
    */
   private speedSpring = new Spring1(10.5, 0.52);
   /** Cluster entry animation. Overshoots slightly, hence the spring. */
   private entrySpring = new Spring1(8.5, 0.72);
   private boostSmooth = 0;
-  private throttleSmooth = 0;
 
   private posPunch = new Punch(9, 24);
   private lapPunch = new Punch(8, 19);
@@ -162,7 +164,7 @@ export class Hud {
 
   private deltaText = '';
   private deltaLabel = '';
-  private deltaColor = CSS.foam;
+  private deltaColor: string = CSS.foam;
   private deltaAge = DELTA_LIFE + 1;
 
   private goTimer = GO_HOLD + 1;
@@ -257,9 +259,7 @@ export class Hud {
     this.speedSpring.step(player ? Math.max(0, player.speed) : 0, dt);
     // Boost charge is smoothed only lightly — it is a resource the player is
     // actively watching, so lag here would be a lie about what is available.
-    this.boostSmooth += ((player?.boostCharge ?? 0) - this.boostSmooth) * (1 - Math.exp(-18 * dt));
-    this.throttleSmooth +=
-      ((player?.throttleLevel ?? 0) - this.throttleSmooth) * (1 - Math.exp(-9 * dt));
+    this.boostSmooth = approach(this.boostSmooth, player?.boostCharge ?? 0, 18, dt);
 
     this.posPunch.step(dt);
     this.lapPunch.step(dt);
@@ -413,7 +413,7 @@ export class Hud {
       alpha: 0.85,
       weight: 0.2,
       outline: 0.12,
-      tracking: 1.8,
+      tracking: 3.1,
     });
     c.restore();
 
@@ -439,7 +439,7 @@ export class Hud {
       fill: CSS.cyan,
       weight: 0.21,
       outline: 0.12,
-      tracking: 1.7,
+      tracking: 3.0,
     });
     const totalLaps = Math.max(1, data.totalLaps ?? 3);
     const lapNow = clamp((pp?.lap ?? 0) + 1, 1, totalLaps);
@@ -455,13 +455,13 @@ export class Hud {
 
     // --- splits ------------------------------------------------------------
     const sy = ly + lh + 10 * u;
-    const sw = 232 * u;
-    const sh = 116 * u;
+    const sw = 244 * u;
+    const sh = 126 * u;
     panel(c, m, sy, sw, sh, {
       fill: CSS.ink,
-      alpha: 0.78,
+      alpha: 0.82,
       slant: 8 * u,
-      cut: 16 * u,
+      cut: 14 * u,
       shadow: 4 * u,
       line: 2.5 * u,
     });
@@ -472,7 +472,7 @@ export class Hud {
       ['LAST', formatTime(times.last), CSS.foam, 21 * u],
       ['BEST', formatTime(times.best), CSS.amber, 21 * u],
     ];
-    let ry = sy + 12 * u;
+    let ry = sy + 11 * u;
     for (const [label, value, fill, size] of rows) {
       drawText(c, label, m + 16 * u, ry + (size - 13 * u) * 0.5, {
         size: 13 * u,
@@ -480,9 +480,11 @@ export class Hud {
         alpha: 0.8,
         weight: 0.22,
         outline: 0.12,
-        tracking: 1.6,
+        tracking: 2.9,
       });
-      drawText(c, value, m + sw - 14 * u, ry, {
+      // Right edge kept clear of the panel's bottom-right chamfer, which the
+      // last row would otherwise hang out of.
+      drawText(c, value, m + sw - 21 * u, ry, {
         size,
         fill,
         align: 'right',
@@ -490,7 +492,7 @@ export class Hud {
         outline: 0.11,
         shadow: 2 * u,
       });
-      ry += size + 13 * u;
+      ry += size + 14 * u;
     }
   }
 
@@ -505,34 +507,35 @@ export class Hud {
     const slide = (1 - inT) * -160 * u + outT * 90 * u;
     const alpha = (1 - outT) * (0.3 + 0.7 * inT);
 
-    const y = 22 * u + 106 * u + 10 * u + 46 * u + 10 * u + 116 * u + 14 * u;
+    // Sits directly under the split block: position + lap + splits + gaps.
+    const y = (22 + 106 + 10 + 46 + 10 + 126 + 14) * u;
     const label = this.deltaLabel;
     const value = this.deltaText;
     const size = 30 * u;
-    const w = Math.max(190 * u, measureText(value, size) + 34 * u);
+    const w = Math.max(196 * u, measureText(value, size) + 52 * u);
 
     c.save();
     c.globalAlpha *= alpha;
     c.translate(slide, 0);
-    panel(c, m, y, w, 62 * u, {
+    panel(c, m, y, w, 72 * u, {
       fill: CSS.ink,
-      alpha: 0.9,
+      alpha: 0.92,
       slant: 12 * u,
       cut: 18 * u,
       shadow: 4 * u,
       line: 2.5 * u,
       stripe: this.deltaColor,
-      stripeWidth: 8 * u,
+      stripeWidth: 9 * u,
     });
-    drawText(c, label, m + 18 * u, y + 9 * u, {
+    drawText(c, label, m + 28 * u, y + 12 * u, {
       size: 12 * u,
       fill: CSS.foam,
       alpha: 0.8,
       weight: 0.24,
       outline: 0.13,
-      tracking: 1.9,
+      tracking: 3.2,
     });
-    drawText(c, value, m + 18 * u, y + 26 * u, {
+    drawText(c, value, m + 26 * u, y + 31 * u, {
       size,
       fill: this.deltaColor,
       weight: 0.2,
@@ -588,27 +591,31 @@ export class Hud {
     const color = racerColor(player?.spec.colorIndex ?? 0);
     const topSpeed = Math.max(6, data.topSpeed ?? player?.spec.topSpeed ?? 30);
 
-    const r = 118 * u;
-    const cx = this.w - m - 148 * u;
-    const cy = this.h - m - 44 * u;
+    // The arc's centre sits well clear of the bottom edge. The ring opens
+    // upwards, so a centre pinned to the margin leaves the gauge feeling like it
+    // fell off the screen even though every tick is technically visible.
+    const r = 124 * u;
+    const cx = this.w - m - 150 * u;
+    const cy = this.h - m - 78 * u;
 
     // Full scale sits 20% past the hull's top speed so a boosted run has
-    // somewhere to go and the needle is not pinned for the whole straight.
+    // somewhere to go instead of pinning the gauge for the whole straight.
     const shown = this.speedSpring.value;
     const t = clamp(shown / (topSpeed * 1.2), 0, 1.06);
     const boosting = (player?.boostTime ?? 0) > 0;
 
     // Backing plate: the arc alone does not give the numerals enough contrast
-    // against bright foam.
-    const plate = panelPath(cx - 104 * u, cy - 96 * u, 208 * u, 104 * u, 14 * u, 22 * u);
+    // against bright foam, and foam is exactly what is behind the bottom-right
+    // corner whenever the player is going fast enough to look at this.
+    const plate = panelPath(cx - 106 * u, cy - 106 * u, 212 * u, 96 * u, 14 * u, 24 * u);
     c.save();
-    c.globalAlpha *= 0.74;
+    c.globalAlpha *= 0.9;
     c.fillStyle = CSS.ink;
     c.fill(plate);
     c.restore();
     c.save();
     c.lineWidth = 2.5 * u;
-    c.strokeStyle = CSS.ink;
+    c.strokeStyle = CSS.inkSoft;
     c.stroke(plate);
     c.restore();
 
@@ -626,43 +633,42 @@ export class Hud {
       gapFrac: 0.24,
     });
 
-    // Redline wedge, drawn as three short ink ticks outside the ring.
+    // Redline marks, drawn *inside* the ring: outside is where the value cursor
+    // travels, and two things sharing that band would collide at top speed.
     for (let i = 0; i < 3; i++) {
-      const a = ARC_START + (ARC_END - ARC_START) * (0.84 + i * 0.06);
+      const a = ARC_START + (ARC_END - ARC_START) * (0.85 + i * 0.055);
       c.save();
       c.strokeStyle = CSS.danger;
-      c.lineWidth = 3 * u;
+      c.lineWidth = 3.5 * u;
       c.beginPath();
-      c.moveTo(cx + Math.cos(a) * (r + 6 * u), cy + Math.sin(a) * (r + 6 * u));
-      c.lineTo(cx + Math.cos(a) * (r + 15 * u), cy + Math.sin(a) * (r + 15 * u));
+      c.moveTo(cx + Math.cos(a) * r * 0.68, cy + Math.sin(a) * r * 0.68);
+      c.lineTo(cx + Math.cos(a) * r * 0.76, cy + Math.sin(a) * r * 0.76);
       c.stroke();
       c.restore();
     }
 
-    needle(
+    // Value cursor: a dart riding the outside of the ring, pointing in.
+    //
+    // A centre-pivot needle does not work at this size — the readout has to live
+    // in the middle of the arc, so a needle spends most of its travel hidden
+    // behind the numbers. An outside marker keeps the instrument's single moving
+    // part while overlapping nothing.
+    const angle = ARC_START + (ARC_END - ARC_START) * clamp01(t);
+    triangle(
       c,
-      cx,
-      cy,
-      ARC_START + (ARC_END - ARC_START) * clamp01(t),
-      r * 0.84,
-      13 * u,
+      cx + Math.cos(angle) * (r + 17 * u),
+      cy + Math.sin(angle) * (r + 17 * u),
+      angle + Math.PI,
+      12 * u,
       boosting ? CSS.foam : CSS.amber,
+      CSS.ink,
+      2.5 * u,
     );
-    // Hub cap over the needle root, so the taper does not look pinned to nothing.
-    c.save();
-    c.beginPath();
-    c.arc(cx, cy, 11 * u, 0, Math.PI * 2);
-    c.fillStyle = CSS.ink;
-    c.fill();
-    c.lineWidth = 2.5 * u;
-    c.strokeStyle = color;
-    c.stroke();
-    c.restore();
 
     // km/h reads bigger and changes faster than m/s, which is what an arcade
     // speedo is for. The physics stays in m/s everywhere else.
     const kph = Math.max(0, Math.round(shown * 3.6));
-    drawText(c, `${kph}`, cx, cy - 88 * u, {
+    drawText(c, `${kph}`, cx, cy - 98 * u, {
       size: 58 * u,
       fill: boosting ? CSS.amber : CSS.foam,
       align: 'center',
@@ -671,22 +677,22 @@ export class Hud {
       shadow: 4 * u,
       slant: 0.26,
     });
-    drawText(c, 'KM/H', cx, cy - 24 * u, {
+    drawText(c, 'KM/H', cx, cy - 32 * u, {
       size: 15 * u,
       fill: CSS.cyan,
       align: 'center',
       weight: 0.22,
       outline: 0.12,
-      tracking: 2.2,
+      tracking: 3.5,
     });
     if (boosting) {
-      drawText(c, 'BOOST', cx, cy + 4 * u, {
+      drawText(c, 'BOOST', cx, cy + 14 * u, {
         size: 17 * u,
         fill: CSS.amber,
         align: 'center',
         weight: 0.24,
         outline: 0.14,
-        tracking: 2,
+        tracking: 3.3,
         alpha: 0.6 + 0.4 * Math.sin(this.blink * 22),
       });
     }
@@ -712,7 +718,7 @@ export class Hud {
       fill: charge >= 0.995 ? CSS.foam : CSS.cyan,
       weight: 0.22,
       outline: 0.13,
-      tracking: 2.2,
+      tracking: 3.5,
       shadow: 2.5 * u,
     });
 
@@ -724,7 +730,7 @@ export class Hud {
         fill: boosting ? CSS.amber : CSS.green,
         weight: 0.24,
         outline: 0.14,
-        tracking: 1.9,
+        tracking: 3.2,
         alpha: 0.55 + 0.45 * Math.sin(this.blink * (boosting ? 26 : 14)),
       });
     }
@@ -749,12 +755,15 @@ export class Hud {
     c.translate(x, y + barH * 0.5);
     c.scale(1, punch);
     c.translate(-x, -(y + barH * 0.5));
+    // Three distinct states, each one colour, because a meter that mixes hues
+    // mid-charge is unreadable at the edge of vision: charging is cyan going
+    // green at the top, armed is all green, firing is all amber.
     segmentedBar(c, x, y, w, barH, {
       value: charge,
       segments: BOOST_SEGMENTS,
-      fill: boosting ? CSS.amber : CSS.cyan,
-      hot: CSS.green,
-      hotFrom: 0.75,
+      fill: boosting ? CSS.amber : full ? CSS.green : CSS.cyan,
+      hot: boosting ? CSS.amber : CSS.green,
+      hotFrom: boosting || full ? 1.1 : 0.75,
       empty: 'rgba(22,41,74,0.55)',
       slant: barH * 0.34,
       gap: 4 * u,
@@ -815,12 +824,31 @@ export class Hud {
     const cy = this.h * 0.4;
     const size = (counting ? 220 : 170) * u;
 
-    const bandH = size * 0.62;
-    const bandW = this.w * (0.34 + 0.5 * (1 - beat) * (1 - beat));
+    // Two stacked slabs: a wide dark one for contrast under the glyph, and a
+    // thin accent one that wipes outwards faster. The pair gives the beat a
+    // direction; a single rectangle just sits there looking like a mistake.
+    const bandH = size * 0.66;
+    const bandW = this.w * (0.4 + 0.55 * (1 - beat) * (1 - beat));
     c.save();
-    c.globalAlpha *= 0.34 * beat;
-    c.fillStyle = counting ? CSS.ink : fill;
-    c.fill(panelPath(cx - bandW * 0.5, cy - bandH * 0.5, bandW, bandH, bandH * 0.3, bandH * 0.4));
+    c.globalAlpha *= 0.7 * beat;
+    c.fillStyle = CSS.ink;
+    c.fill(panelPath(cx - bandW * 0.5, cy - bandH * 0.5, bandW, bandH, bandH * 0.28, bandH * 0.36));
+    c.restore();
+    c.save();
+    c.globalAlpha *= 0.85 * beat;
+    c.fillStyle = fill;
+    const accentH = size * 0.075;
+    const accentW = bandW * 1.08;
+    c.fill(
+      panelPath(
+        cx - accentW * 0.5,
+        cy + bandH * 0.5 - accentH * 0.5,
+        accentW,
+        accentH,
+        accentH * 1.6,
+        0,
+      ),
+    );
     c.restore();
 
     c.save();
@@ -850,31 +878,34 @@ export class Hud {
     const h = 66 * u;
 
     // Hard on/off at ~5 Hz rather than a sine fade: an alarm should strobe, and
-    // a smoothly pulsing banner reads as decoration.
+    // a smoothly pulsing banner reads as decoration. The *fill* strobes while
+    // the silhouette stays opaque — blinking the alpha instead leaves the banner
+    // semi-transparent over bright water for half of every cycle, which is when
+    // it is least legible and most needed.
     const on = Math.sin(this.blink * 15) > -0.25;
     c.save();
-    c.globalAlpha *= on ? 1 : 0.35;
     panel(c, cx - w * 0.5, y, w, h, {
-      fill: CSS.danger,
+      fill: on ? CSS.danger : CSS.ink,
       slant: 22 * u,
       cut: 24 * u,
       shadow: 6 * u,
       line: 3.5 * u,
     });
     drawText(c, 'WRONG WAY', cx + 6 * u, y + h * 0.5, {
-      size: 34 * u,
-      fill: CSS.ink,
+      size: 32 * u,
+      fill: on ? CSS.ink : CSS.danger,
       ink: 'none',
       align: 'center',
       baseline: 'middle',
       weight: 0.2,
-      tracking: 1.7,
+      tracking: 3.0,
     });
     // Chevrons pointing back the way the player should be going.
     for (let i = 0; i < 2; i++) {
-      const o = w * 0.5 - 26 * u - i * 20 * u;
-      chevron(c, cx - o, y + h * 0.5, 13 * u, -1, CSS.foam, 1 - i * 0.35);
-      chevron(c, cx + o, y + h * 0.5, 13 * u, -1, CSS.foam, 1 - i * 0.35);
+      const o = w * 0.5 - 30 * u - i * 22 * u;
+      const tint = on ? CSS.foam : CSS.danger;
+      chevron(c, cx - o, y + h * 0.5, 13 * u, -1, tint, 1 - i * 0.35);
+      chevron(c, cx + o, y + h * 0.5, 13 * u, -1, tint, 1 - i * 0.35);
     }
     c.restore();
   }
@@ -896,7 +927,7 @@ export class Hud {
     const base = 205 * u;
 
     c.save();
-    c.globalAlpha *= 0.25 + 0.55 * strength;
+    c.globalAlpha *= 0.45 + 0.5 * strength;
     for (let i = 0; i < 3; i++) {
       // Marching phase: the chevrons light in sequence towards the turn, which
       // gives the cluster a direction without needing an arrowhead.

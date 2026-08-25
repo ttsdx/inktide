@@ -27,8 +27,13 @@ export interface CelMaterialOptions {
   /** Tint the ramp to this colour instead of using the neutral shared one. */
   rampTint?: Color;
   rimColor?: Color;
+  /** Cool sky rim on the shadow side. */
   rimStrength?: number;
+  /** Warm key rim on the sun side. */
+  keyRimStrength?: number;
   rimPower?: number;
+  /** Threshold on the fresnel term; larger = thinner rim. */
+  rimWidth?: number;
   specStrength?: number;
   specSize?: number;
   matcapStrength?: number;
@@ -83,7 +88,10 @@ export class CelMaterial extends ShaderMaterial {
 
     if (opts.rimColor) (this.uniforms.uRimColor.value as Color).copy(opts.rimColor);
     if (opts.rimStrength !== undefined) this.uniforms.uRimStrength.value = opts.rimStrength;
+    if (opts.keyRimStrength !== undefined)
+      this.uniforms.uKeyRimStrength.value = opts.keyRimStrength;
     if (opts.rimPower !== undefined) this.uniforms.uRimPower.value = opts.rimPower;
+    if (opts.rimWidth !== undefined) this.uniforms.uRimWidth.value = opts.rimWidth;
     if (opts.specStrength !== undefined) this.uniforms.uSpecStrength.value = opts.specStrength;
     if (opts.specSize !== undefined) this.uniforms.uSpecSize.value = opts.specSize;
     if (opts.matcapStrength !== undefined) this.uniforms.uMatcapStrength.value = opts.matcapStrength;
@@ -300,10 +308,10 @@ void main() {
   // than punching black holes in the sky.
   vec3 col = applyCelHaze(uInk, vViewDepth, vec3(0.0, 0.2, -1.0));
   outColor = vec4(col, 1.0);
-  // Outlines participate in the depth buffer but must not generate a *second*
-  // interior line: write the same normal as the surface behind them by flipping
-  // the backface normal, and mark them with full depth so Sobel skips them.
-  writeNormalDepth(-vViewNormal, vViewDepth);
+  // Flag the ink so the Sobel pass cannot draw a second line against it — see
+  // writeInkNormalDepth. Writing the negated backface normal here (the previous
+  // approach) made the ink band a normal discontinuity in its own right.
+  writeInkNormalDepth(vViewDepth);
 }
 `;
 

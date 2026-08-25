@@ -78,39 +78,51 @@ const SHEET = `
 }
 .it-screen.it-on { display: flex; }
 
-/* Backdrops are flat ink plus hard diagonal bands — a stepped wash, never a
-   soft radial one, so the screen reads as printed card stock. */
+/* Deep water, banded with ink. Not flat ink: the panels *are* ink, and an ink
+   panel on an ink backdrop has no silhouette at all. The bands are hard stops,
+   so this is a stepped wash rather than a gradient. */
 .it-wash {
   position: absolute; inset: 0;
   background:
     repeating-linear-gradient(102deg,
       rgba(10,18,38,0.00) 0px, rgba(10,18,38,0.00) 34px,
-      rgba(10,18,38,0.16) 34px, rgba(10,18,38,0.16) 68px),
-    ${CSS.ink};
-  opacity: 0.9;
+      rgba(10,18,38,0.30) 34px, rgba(10,18,38,0.30) 68px),
+    ${CSS.waterDeep};
+  opacity: 0.94;
   animation: it-fade 320ms steps(4, end) both;
 }
-.it-wash.it-light { opacity: 0.66; }
+/* Separate keyframes rather than one shared set: animation-fill-mode both pins
+   the final opacity, so a shared "to" would clobber the lighter variant. */
+.it-wash.it-light { opacity: 0.72; animation-name: it-fade-light; }
 
 .it-stack { position: relative; display: flex; flex-direction: column; align-items: center; }
 
-.it-headline { display: block; image-rendering: auto; }
+/* Two sheared paint slabs behind the title, in racer colours. Purely graphic —
+   a centred column of type on a flat wash has no composition, and this is the
+   cheapest way to get the poster diagonal the rest of the game is drawn on. */
+.it-slabs { position: absolute; left: -18%; right: -18%; top: -14%; bottom: 34%; overflow: hidden; }
+/* Scaled rather than width-animated: a width keyframe with fill-mode both would
+   pin the final width at 100% and wipe out the per-slab sizes. */
+.it-slab {
+  position: absolute; height: 30px; border: 3px solid ${CSS.ink};
+  animation: it-slab-in 520ms cubic-bezier(.2,.9,.2,1) both;
+}
+.it-slab-a { background: ${CSS.racer[0]}; left: 2%; width: 44%; top: 12%; transform-origin: left center; }
+.it-slab-b {
+  background: ${CSS.amber}; right: 4%; width: 30%; top: 74%;
+  transform-origin: right center; animation-delay: 90ms;
+}
+
+.it-headline { display: block; }
 .it-headline.it-pop { animation: it-pop 420ms cubic-bezier(.16,1.5,.3,1) both; }
 
 .it-rule {
-  height: 8px; background: ${CSS.cyan}; border: 3px solid ${CSS.ink};
-  transform: skewX(-24deg); margin: 10px 0 0 0;
+  height: 14px; background: ${CSS.cyan}; border: 3px solid ${CSS.ink};
+  transform: skewX(-24deg); margin: 12px 0 4px 0; box-shadow: 5px 5px 0 ${CSS.ink};
   animation: it-wipe 420ms cubic-bezier(.2,.9,.2,1) both;
 }
-.it-sub {
-  margin-top: 16px; font-size: 14px; letter-spacing: 0.42em; color: ${CSS.cyan};
-  transform: skewX(-8deg); text-shadow: 2px 2px 0 ${CSS.ink};
-}
-.it-prompt {
-  margin-top: 30px; font-size: 17px; letter-spacing: 0.3em; color: ${CSS.foam};
-  transform: skewX(-8deg); text-shadow: 3px 3px 0 ${CSS.ink};
-  animation: it-blink 1.15s steps(2, end) infinite;
-}
+.it-sub { margin-top: 14px; }
+.it-prompt { margin-top: 26px; animation: it-blink 1.15s steps(2, end) infinite; }
 
 /* Panels: sheared, two opposite corners cut, hard offset ink shadow. Identical
    construction to panelPath() on the canvas side. */
@@ -121,15 +133,23 @@ const SHEET = `
   box-shadow: 9px 9px 0 ${CSS.ink};
 }
 .it-results {
-  padding: 26px 30px 22px; min-width: min(760px, 92vw);
-  background: rgba(10,18,38,0.94);
+  padding: 26px 32px 24px; min-width: min(780px, 92vw);
+  background: rgba(10,18,38,0.95);
+  border-color: ${CSS.inkSoft};
   animation: it-rise 380ms cubic-bezier(.2,.9,.2,1) both;
+}
+/* Corner accent: the panel silhouette is ink on a dark wash, so it needs one
+   bright edge to stop it dissolving into the backdrop. */
+.it-results::before {
+  content: ''; position: absolute; left: 0; top: 26px; width: 8px; height: 78px;
+  background: ${CSS.cyan};
 }
 .it-verdict {
   display: flex; align-items: baseline; gap: 14px; margin: 4px 0 18px;
   transform: skewX(-8deg);
 }
-.it-verdict-note { font-size: 15px; letter-spacing: 0.26em; color: ${CSS.cyan}; }
+/* Holds a vector caption, so it carries no type properties of its own. */
+.it-verdict-note { display: flex; align-items: center; padding-bottom: 6px; }
 
 .it-grid { display: grid; grid-template-columns: 58px 1fr 116px 116px 104px; row-gap: 6px; }
 .it-th {
@@ -165,9 +185,9 @@ const SHEET = `
 .it-actions { display: flex; gap: 14px; align-items: center; margin-top: 22px; }
 .it-btn {
   pointer-events: auto; cursor: pointer; appearance: none;
-  font: inherit; font-size: 18px; letter-spacing: 0.24em; color: ${CSS.ink};
+  font: inherit; font-size: 21px; letter-spacing: 0.26em; color: ${CSS.ink};
   background: ${CSS.cyan}; border: 3px solid ${CSS.ink};
-  padding: 13px 26px 12px; transform: skewX(-10deg);
+  padding: 15px 30px 14px; transform: skewX(-10deg);
   clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
   box-shadow: 6px 6px 0 ${CSS.ink};
   transition: transform 90ms steps(2, end), background-color 90ms steps(2, end), box-shadow 90ms steps(2, end);
@@ -177,13 +197,18 @@ const SHEET = `
 .it-btn.it-alt { background: ${CSS.amber}; }
 .it-hint { font-size: 12px; letter-spacing: 0.24em; color: ${CSS.cyan}; opacity: 0.8; transform: skewX(-8deg); }
 
-@keyframes it-fade { from { opacity: 0; } to { opacity: 0.9; } }
+@keyframes it-fade { from { opacity: 0; } to { opacity: 0.94; } }
+@keyframes it-fade-light { from { opacity: 0; } to { opacity: 0.72; } }
 @keyframes it-pop {
   0% { transform: scale(0.72) skewX(-6deg); opacity: 0; }
   60% { transform: scale(1.06) skewX(0deg); opacity: 1; }
   100% { transform: scale(1) skewX(0deg); opacity: 1; }
 }
 @keyframes it-wipe { from { width: 0; } to { width: 100%; } }
+@keyframes it-slab-in {
+  from { transform: skewX(-24deg) scaleX(0); }
+  to { transform: skewX(-24deg) scaleX(1); }
+}
 @keyframes it-rise { from { transform: translateY(26px); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes it-slide { from { transform: translateX(-34px); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes it-blink { 0%, 55% { opacity: 1; } 56%, 100% { opacity: 0.25; } }
@@ -204,7 +229,7 @@ function headlineCanvas(
 ): HTMLCanvasElement {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const slant = opts.slant ?? 0.26;
-  const tracking = opts.tracking ?? 1.6;
+  const tracking = opts.tracking ?? 2.6;
   const shadow = opts.shadow ?? size * 0.06;
   const pad = size * 0.34 + shadow;
   const w = Math.ceil(measureText(text, size, tracking) + pad * 2);
@@ -318,19 +343,21 @@ export class Screens {
     const screen = div('it-screen');
     screen.appendChild(div('it-wash'));
     const stack = div('it-stack');
+    const slabs = div('it-slabs');
+    slabs.appendChild(div('it-slab it-slab-a'));
+    slabs.appendChild(div('it-slab it-slab-b'));
+    stack.appendChild(slabs);
     const head = headlineCanvas('INK TIDE', 96, CSS.foam, { shadow: 8 });
     head.classList.add('it-pop');
     stack.appendChild(head);
-    const rule = div('it-rule');
-    rule.style.width = '82%';
-    stack.appendChild(rule);
-    stack.appendChild(text('it-sub', 'CEL-SHADED OCEAN RACING'));
+    stack.appendChild(div('it-rule'));
+    stack.appendChild(caption('it-sub', 'CEL-SHADED OCEAN RACING', 15, CSS.cyan));
 
     const actions = div('it-actions');
     const start = button('it-btn', 'START RACE', () => this.onStart?.());
     actions.appendChild(start);
     stack.appendChild(actions);
-    stack.appendChild(text('it-prompt', 'PRESS ENTER OR CLICK TO LAUNCH'));
+    stack.appendChild(caption('it-prompt', 'PRESS ENTER OR CLICK TO LAUNCH', 14, CSS.foam));
     screen.appendChild(stack);
     return screen;
   }
@@ -342,14 +369,12 @@ export class Screens {
     const head = headlineCanvas('PAUSED', 70, CSS.cyan, { shadow: 6 });
     head.classList.add('it-pop');
     stack.appendChild(head);
-    const rule = div('it-rule');
-    rule.style.width = '70%';
-    stack.appendChild(rule);
+    stack.appendChild(div('it-rule'));
     const actions = div('it-actions');
     actions.appendChild(button('it-btn', 'RESUME', () => this.onResume?.()));
     actions.appendChild(button('it-btn it-alt', 'RESTART', () => this.onRestart?.()));
     stack.appendChild(actions);
-    stack.appendChild(text('it-hint', 'ESC TO RESUME'));
+    stack.appendChild(caption('it-hint', 'ESC TO RESUME', 13, CSS.cyan));
     screen.appendChild(stack);
     return screen;
   }
@@ -364,7 +389,7 @@ export class Screens {
     panel.appendChild(div('it-grid'));
     const actions = div('it-actions');
     actions.appendChild(button('it-btn', 'RACE AGAIN', () => this.onRestart?.()));
-    actions.appendChild(text('it-hint', 'ENTER TO RESTART'));
+    actions.appendChild(caption('it-hint', 'ENTER TO RESTART', 13, CSS.cyan));
     panel.appendChild(actions);
     stack.appendChild(panel);
     screen.appendChild(stack);
@@ -398,7 +423,12 @@ export class Screens {
         ),
       );
       verdict.appendChild(
-        text('it-verdict-note', won ? 'FLAWLESS RUN' : place <= 3 ? 'ON THE PODIUM' : 'SHAKE IT OFF'),
+        caption(
+          'it-verdict-note',
+          won ? 'FLAWLESS RUN' : place <= 3 ? 'ON THE PODIUM' : 'SHAKE IT OFF',
+          15,
+          won ? CSS.amber : CSS.cyan,
+        ),
       );
     }
 
@@ -478,6 +508,20 @@ function text(className: string, content: string): HTMLDivElement {
   const el = div(className);
   el.textContent = content;
   return el;
+}
+
+/**
+ * Small caption drawn with the vector font.
+ *
+ * Every word on these screens that is not inside the results table goes through
+ * here. Mixing a browser font with the stroke font in one composition is
+ * immediately obvious — two different ideas of what a letter is — so the table
+ * is the only place a system font appears at all.
+ */
+function caption(className: string, label: string, size: number, fill: string): HTMLDivElement {
+  const wrap = div(className);
+  wrap.appendChild(headlineCanvas(label, size, fill, { shadow: 2, tracking: 3.8, slant: 0.2 }));
+  return wrap;
 }
 
 function cell(content: string): HTMLDivElement {

@@ -1,42 +1,66 @@
-import { Vector3 } from 'three';
+import { Color, Group, Object3D, Vector3 } from 'three';
 import { Engine, type QualityTier } from './core/Engine.ts';
 import { Input } from './core/Input.ts';
 import { CameraRig, type CameraMode, type ChaseTarget } from './core/CameraRig.ts';
+import { Effects } from './core/Effects.ts';
 import { Sky } from './world/Sky.ts';
-import { Ocean } from './world/Ocean.ts';
+import { Ocean, type HullContact } from './world/Ocean.ts';
+import { WakeField, type WakeEmitter } from './world/WakeField.ts';
 import { sampleOcean } from './world/gerstner.ts';
-import { LAYER_OPAQUE, LAYER_SKY } from './render/layers.ts';
+import { LAYER_OPAQUE, LAYER_OVERLAY, LAYER_SKY } from './render/layers.ts';
 import { ProbeScene } from './dev/ProbeScene.ts';
+import { Course } from './race/Course.ts';
+import { RacingLine } from './race/RacingLine.ts';
+import { BoatPhysics } from './entities/BoatPhysics.ts';
+import { BOAT_SPECS, HULL_BEAM, RIDER_MOUNT } from './entities/hullSpec.ts';
+import { Rider } from './entities/Rider.ts';
+import type { BoatCommand, RiderPose } from './contracts.ts';
 
 /**
  * Top-level game object. Owns the engine, the world and the race, and is the
  * single place the screenshot harness talks to.
  *
- * Systems are deliberately leaf-shaped: each one exposes `update(dt, ctx)` and
- * knows nothing about the others. `Game` is the only module allowed to wire
- * them together, which keeps the dependency graph a tree.
+ * Systems are deliberately leaf-shaped: each exposes an `update` and knows
+ * nothing about the others. `Game` is the only module allowed to wire them
+ * together, which keeps the dependency graph a tree.
  */
 
-export interface HarnessCameraPreset {
-  name: string;
-  position: [number, number, number];
-  target: [number, number, number];
+/** One racer: physics, its visual boat, and its rider. */
+interface Racer {
+  physics: BoatPhysics;
+  rider: Rider;
+  /** Node the rider hangs from; follows the hull transform. */
+  mount: Object3D;
+  pose: RiderPose;
+  command: BoatCommand;
 }
 
 export class Game {
   readonly engine: Engine;
   readonly input: Input;
   readonly rig: CameraRig;
+  readonly effects = new Effects();
+
   readonly sky: Sky;
   readonly ocean: Ocean;
+  wake: WakeField | null = null;
+
+  course: Course | null = null;
+  racingLine: RacingLine | null = null;
+
+  readonly racers: Racer[] = [];
+  /** Scene root for everything race-related, so it can be rebuilt on restart. */
+  private readonly raceRoot = new Group();
 
   private started = false;
   private paused = false;
   private probe: ProbeScene | null = null;
 
-  /** Fake chase target until the player boat exists. */
-  private dummyTarget: ChaseTarget = {
-    position: new Vector3(0, 0, 0),
+  /** Reusable buffers so the per-frame wiring does not allocate. */
+  private readonly emitters: WakeEmitter[] = [];
+  private readonly contacts: HullContact[] = [];
+  private readonly chase: ChaseTarget = {
+    position: new Vector3(),
     forward: new Vector3(0, 0, 1),
     up: new Vector3(0, 1, 0),
     speed: 0,
@@ -53,38 +77,50 @@ export class Game {
     const tier = (url.searchParams.get('quality') as QualityTier | null) ?? undefined;
     const adaptive = url.searchParams.get('adaptive') !== '0';
 
-    this.engine = new Engine({
-      canvas,
-      tier: tier ?? 'high',
-      adaptive,
-      maxPixelRatio: 2,
-    });
-
+    this.engine = new Engine({ canvas, tier: tier ?? 'high', adaptive, maxPixelRatio: 2 });
     this.input = new Input(canvas);
     this.rig = new CameraRig(this.engine.camera);
     this.sky = new Sky();
     this.ocean = new Ocean();
   }
 
+  get player(): Racer | null {
+    return this.racers[0] ?? null;
+  }
+
   async init(): Promise<void> {
     const scene = this.engine.scene;
+    const url = new URL(window.location.href);
 
     this.sky.group.traverse((o) => o.layers.set(LAYER_SKY));
     scene.add(this.sky.group);
     scene.add(this.ocean.mesh);
+    scene.add(this.raceRoot);
 
     // The ocean samples the copied scene depth for its waterline foam.
     this.engine.pipeline.onDepthReady = (tex, w, h) => this.ocean.setSceneDepth(tex, w, h);
 
-    if (new URL(window.location.href).searchParams.get('probe') === '1') {
+    this.effects.flashSink = (c, s) => this.engine.pipeline.flash(c, s);
+    this.effects.shakeSink = (a, f) => this.rig.shake(a, f);
+
+    // --- world -------------------------------------------------------------
+    this.wake = new WakeField(this.engine.renderer, { resolution: 1024, halfExtent: 260 });
+
+    this.course = new Course();
+    this.racingLine = new RacingLine(this.course);
+    this.racingLine.mesh.traverse((o) => o.layers.set(LAYER_OVERLAY));
+    this.raceRoot.add(this.racingLine.mesh);
+
+    // --- racers ------------------------------------------------------------
+    this.buildRacers();
+
+    if (url.searchParams.get('probe') === '1') {
       this.probe = new ProbeScene();
       scene.add(this.probe.root);
     }
 
-    this.rig.mode = 'orbit';
-    this.rig.orbitCenter.set(0, 1.5, 0);
-    this.rig.orbitRadius = 30;
-    this.rig.orbitHeight = 8;
+    this.rig.mode = 'chase';
+    if (this.player) this.snapCameraToPlayer();
 
     this.engine.onUpdate(this.update);
 
@@ -93,10 +129,197 @@ export class Game {
     this.engine.stepFixed(1 / 60);
   }
 
+  private buildRacers(): void {
+    const course = this.course;
+    if (!course) return;
+
+    for (let i = 0; i < BOAT_SPECS.length; i++) {
+      const slot = course.startGrid[i % course.startGrid.length];
+      const physics = new BoatPhysics(i, BOAT_SPECS[i], slot.position.clone(), slot.heading);
+      physics.respawn(slot.position.clone(), slot.heading, 0);
+
+      // The rider hangs off a mount node that carries the hull transform. Once
+      // the visual boat exists this node is reparented to Boat.riderMount; until
+      // then it is driven directly, so the rider can be seen and critiqued
+      // without waiting on hull geometry.
+      const mount = new Object3D();
+      mount.position.copy(RIDER_MOUNT);
+      const hull = new Object3D();
+      hull.add(mount);
+      hull.layers.set(LAYER_OPAQUE);
+      this.raceRoot.add(hull);
+
+      const rider = new Rider(BOAT_SPECS[i].colorIndex);
+      rider.root.traverse((o) => o.layers.set(LAYER_OPAQUE));
+      mount.add(rider.root);
+
+      this.racers.push({
+        physics,
+        rider,
+        mount: hull,
+        pose: Rider.restPose(),
+        command: { throttle: 0, brake: 0, steer: 0, drift: false },
+      });
+    }
+  }
+
   start(): void {
     if (this.started) return;
     this.started = true;
     this.engine.start();
+  }
+
+  private snapCameraToPlayer(): void {
+    const p = this.player;
+    if (!p) return;
+    this.syncChaseTarget();
+    this.rig.snapTo(this.chase);
+  }
+
+  private syncChaseTarget(): void {
+    const p = this.player;
+    if (!p) return;
+    const s = p.physics;
+    this.chase.position.copy(s.position);
+    this.chase.forward.copy(s.forward);
+    this.chase.up.copy(s.up);
+    this.chase.speed = s.speed;
+    this.chase.drift = s.driftAmount;
+    this.chase.slip = s.lateralSpeed;
+    this.chase.airborne = s.airborne;
+  }
+
+  // -------------------------------------------------------------------------
+
+  private update = (dt: number, elapsed: number): void => {
+    if (this.paused) return;
+    const control = this.input.update(dt);
+    this.effects.tick(elapsed);
+
+    const ctx = { dt, elapsed, frame: this.engine.frame };
+
+    // --- drive ---------------------------------------------------------------
+    for (let i = 0; i < this.racers.length; i++) {
+      const r = this.racers[i];
+      if (i === 0) {
+        r.command.throttle = control.throttle;
+        r.command.brake = control.brake;
+        r.command.steer = control.steer;
+        r.command.drift = control.drift;
+      } else {
+        // Placeholder until the AI controllers land: hold station on the grid.
+        r.command.throttle = 0;
+        r.command.brake = 0;
+        r.command.steer = 0;
+        r.command.drift = false;
+      }
+      r.physics.update(r.command, ctx, i === 0 ? this.effects : null);
+    }
+
+    // Boat-to-boat contact, all pairs. Four racers means six tests.
+    for (let a = 0; a < this.racers.length; a++) {
+      for (let b = a + 1; b < this.racers.length; b++) {
+        this.racers[a].physics.resolveBoatCollision(this.racers[b].physics);
+      }
+    }
+
+    // --- visuals -------------------------------------------------------------
+    this.emitters.length = 0;
+    this.contacts.length = 0;
+
+    for (const r of this.racers) {
+      const s = r.physics;
+
+      r.mount.position.copy(s.position);
+      s.getQuaternion(r.mount.quaternion);
+
+      r.pose = Rider.poseFromBoat(s, r.pose, dt, 0);
+      r.rider.update(r.pose, ctx);
+
+      if (!s.airborne) {
+        this.emitters.push({
+          position: s.position,
+          forward: s.forward,
+          speed: s.speed,
+          turnRate: s.steerLevel * 1.4,
+          width: HULL_BEAM,
+          strength: Math.min(1, 0.25 + s.speed / 22),
+        });
+      }
+
+      this.contacts.push({
+        position: s.position,
+        radius: 2.6,
+        strength: Math.min(1, 0.35 + s.speed / 26),
+        forwardX: s.forward.x,
+        forwardZ: s.forward.z,
+      });
+    }
+
+    // --- camera --------------------------------------------------------------
+    this.syncChaseTarget();
+    if (control.cameraPressed) this.cycleCamera();
+    this.rig.update(dt, this.chase, elapsed);
+    this.keepCameraAboveWater(elapsed);
+
+    // --- world ---------------------------------------------------------------
+    const cam = this.engine.camera;
+    const focus = this.player?.physics.position ?? cam.position;
+
+    if (this.wake) {
+      this.wake.follow(focus.x, focus.z);
+      this.wake.submit(this.emitters);
+      this.wake.update(ctx);
+      this.ocean.setWakeField(this.wake.texture, this.wake.centerX, this.wake.centerZ, this.wake.extent);
+    }
+
+    this.ocean.setContacts(this.contacts);
+    this.probe?.update(elapsed);
+    this.sky.update(cam, elapsed);
+    this.ocean.update(cam, elapsed);
+
+    if (this.racingLine && this.course && this.player) {
+      this.racingLine.update(elapsed, cam.position);
+      const t = this.course.closestT(this.player.physics.position, this.lastPlayerT);
+      this.lastPlayerT = t;
+      this.updateCornerPreview(t);
+    }
+
+    if (control.resetPressed) this.respawnPlayer(elapsed);
+  };
+
+  private lastPlayerT = 0;
+  private readonly curvatureAhead = new Float32Array(24);
+
+  /** Sample curvature down the road so the ribbon can colour the corner ahead. */
+  private updateCornerPreview(t: number): void {
+    const line = this.racingLine;
+    const course = this.course;
+    if (!line || !course) return;
+    let cursor = t;
+    for (let i = 0; i < this.curvatureAhead.length; i++) {
+      this.curvatureAhead[i] = course.sample(Course.wrap(cursor)).curvature;
+      cursor = course.advance(cursor, line.previewSpacing);
+    }
+    line.setPlayerProgress(t, this.curvatureAhead);
+  }
+
+  private cycleCamera(): void {
+    const order: CameraMode[] = ['chase', 'onboard', 'heli'];
+    const i = order.indexOf(this.rig.mode);
+    this.rig.mode = order[(i + 1) % order.length];
+  }
+
+  private respawnPlayer(elapsed: number): void {
+    const p = this.player;
+    const course = this.course;
+    if (!p || !course) return;
+    // Put the player back on the racing line facing the right way, which is the
+    // only respawn that is never a punishment.
+    const point = course.sample(Course.wrap(this.lastPlayerT), elapsed);
+    const heading = Math.atan2(point.tangent.x, point.tangent.z);
+    p.physics.respawn(point.position.clone(), heading, elapsed);
+    this.snapCameraToPlayer();
   }
 
   /**
@@ -107,10 +330,6 @@ export class Game {
    * sided the frame it happens on shows straight through the surface. Rather
    * than paying for a two-sided ocean and an underwater look for two frames a
    * minute, the camera is simply not allowed below the surface.
-   *
-   * The clamp is applied as a floor with a soft approach rather than a hard
-   * snap, so a crest sliding under the camera lifts it smoothly instead of
-   * stepping it.
    */
   private keepCameraAboveWater(elapsed: number): void {
     const cam = this.engine.camera;
@@ -133,28 +352,11 @@ export class Game {
     this.update(dt, this.engine.elapsed);
   }
 
-  private update = (dt: number, elapsed: number): void => {
-    if (this.paused) return;
-    const control = this.input.update(dt);
-
-    // Track the ocean surface so the orbit camera never dips underwater.
-    const s = sampleOcean(this.dummyTarget.position.x, this.dummyTarget.position.z, elapsed);
-    this.dummyTarget.position.y = s.height;
-    this.rig.orbitCenter.y = s.height + 1.5;
-
-    this.probe?.update(elapsed);
-    this.rig.update(dt, this.dummyTarget, elapsed);
-    this.keepCameraAboveWater(elapsed);
-    this.sky.update(this.engine.camera, elapsed);
-    this.ocean.update(this.engine.camera, elapsed);
-  };
-
   // -------------------------------------------------------------------------
   // Screenshot harness API
   // -------------------------------------------------------------------------
 
   readonly harness = {
-    /** True once the first frame has rendered and shaders are compiled. */
     ready: (): boolean => this.started,
 
     pause: (): void => {
@@ -172,24 +374,19 @@ export class Game {
      *
      * `render` is off by default: fast-forwarding thirty seconds of race with a
      * full render on every step would take minutes on a software rasteriser,
-     * and the intermediate frames are never looked at. Systems that genuinely
-     * need per-step GPU work (the wake foam field) are ticked through
-     * `simulateOnly` so the state at the capture point is still correct.
+     * and the intermediate frames are never looked at.
      */
     step: (frames: number, dt = 1 / 60, render = false): void => {
       const wasPaused = this.paused;
       this.paused = false;
       for (let i = 0; i < frames; i++) {
-        if (render) {
-          this.engine.stepFixed(dt);
-        } else {
-          this.simulateOnly(dt);
-        }
+        if (render) this.engine.stepFixed(dt);
+        else this.simulateOnly(dt);
       }
       this.paused = wasPaused;
     },
 
-    /** Render exactly n frames without advancing time beyond dt each. */
+    /** Render exactly n frames, advancing time by dt each. */
     renderFrames: (n = 1, dt = 1 / 60): void => {
       const wasPaused = this.paused;
       this.paused = false;
@@ -197,7 +394,6 @@ export class Game {
       this.paused = wasPaused;
     },
 
-    /** Jump the simulation to an absolute time by stepping (deterministic). */
     seek: (seconds: number, dt = 1 / 60): void => {
       const steps = Math.max(0, Math.round((seconds - this.engine.elapsed) / dt));
       this.harness.step(Math.min(steps, 60 * 600), dt);
@@ -211,12 +407,38 @@ export class Game {
       this.rig.setFree(new Vector3(...pos), new Vector3(...target));
     },
 
+    /**
+     * Frame the player's boat from a spherical offset in its own frame, so a
+     * shot stays composed no matter where on the course the boat has got to.
+     * yaw is relative to the boat's heading.
+     */
+    frameBoat: (
+      index: number,
+      yaw: number,
+      pitch: number,
+      distance: number,
+      lookHeight = 1.0,
+    ): void => {
+      const r = this.racers[index];
+      if (!r) return;
+      const s = r.physics;
+      const heading = Math.atan2(s.forward.x, s.forward.z) + yaw;
+      const cp = Math.cos(pitch);
+      const eye = new Vector3(
+        s.position.x + Math.sin(heading) * distance * cp,
+        s.position.y + Math.sin(pitch) * distance + lookHeight,
+        s.position.z + Math.cos(heading) * distance * cp,
+      );
+      this.rig.setFree(eye, new Vector3(s.position.x, s.position.y + lookHeight, s.position.z));
+    },
+
     setOrbit: (angle: number, radius: number, height: number): void => {
       this.rig.mode = 'orbit';
       this.rig.orbitAngle = angle;
       this.rig.orbitRadius = radius;
       this.rig.orbitHeight = height;
       this.rig.orbitSpeed = 0;
+      if (this.player) this.rig.orbitCenter.copy(this.player.physics.position);
     },
 
     setInput: (state: Record<string, unknown> | null): void => {
@@ -232,9 +454,18 @@ export class Game {
       this.engine.pipeline.setDebugView(mode);
     },
 
-    /** Tweak any pipeline pass uniform by name, for tuning sweeps. */
     setPassUniform: (pass: string, name: string, value: number): void => {
       this.engine.pipeline.setPassUniform(pass, name, value);
+    },
+
+    /** Teleport the player onto the spline, for shots of a specific corner. */
+    placeOnCourse: (t: number): void => {
+      const p = this.player;
+      if (!p || !this.course) return;
+      const point = this.course.sample(Course.wrap(t), this.engine.elapsed);
+      const heading = Math.atan2(point.tangent.x, point.tangent.z);
+      p.physics.respawn(point.position.clone(), heading, this.engine.elapsed);
+      this.lastPlayerT = t;
     },
 
     stats: () => ({
@@ -248,6 +479,9 @@ export class Game {
       programs: this.engine.renderer.info.programs?.length ?? 0,
       geometries: this.engine.renderer.info.memory.geometries,
       textures: this.engine.renderer.info.memory.textures,
+      speed: this.player?.physics.speed ?? 0,
+      airborne: this.player?.physics.airborne ?? false,
+      courseT: this.lastPlayerT,
     }),
   };
 }

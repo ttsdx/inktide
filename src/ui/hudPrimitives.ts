@@ -31,25 +31,8 @@ export const clamp = (v: number, lo: number, hi: number): number =>
 
 export const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
 
-export const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
-
 /** 0..1 remap of `v` between `a` and `b`, clamped. */
 export const range01 = (a: number, b: number, v: number): number => clamp01((v - a) / (b - a || 1));
-
-export const smoothstep = (t: number): number => {
-  const x = clamp01(t);
-  return x * x * (3 - 2 * x);
-};
-
-export const easeOutCubic = (t: number): number => 1 - Math.pow(1 - clamp01(t), 3);
-
-export const easeInCubic = (t: number): number => Math.pow(clamp01(t), 3);
-
-/** Overshoot ease used for panels sliding in — lands past the mark then settles. */
-export const easeOutBack = (t: number, k = 1.7): number => {
-  const x = clamp01(t) - 1;
-  return 1 + (k + 1) * x * x * x + k * x * x;
-};
 
 /**
  * Frame-rate independent exponential approach.
@@ -274,7 +257,17 @@ export interface TextStyle {
 }
 
 const DEFAULT_SLANT = 0.2;
-const DEFAULT_TRACKING = 1.15;
+/**
+ * Default advance gap between glyphs, in grid units.
+ *
+ * It has to exceed the body stroke width or adjacent glyphs merge: the strokes
+ * are centred on the authored coordinates, so a `weight` of 0.17 puts 0.85 units
+ * of ink outside each glyph's nominal box on both sides. Anything below ~1.8
+ * makes "99" read as a single blob. The ink *outlines* still touch and fuse at
+ * this spacing, which is wanted — that is what makes a word read as one drawn
+ * object rather than a row of stickers.
+ */
+const DEFAULT_TRACKING = 2.3;
 
 /** Advance width of `text` in pixels at `size`. */
 export function measureText(text: string, size: number, tracking = DEFAULT_TRACKING): number {
@@ -646,40 +639,6 @@ export function segmentedArc(
       c.stroke(p);
     }
   }
-  c.restore();
-}
-
-/** Chunky ink-outlined needle for the speedometer. */
-export function needle(
-  c: Ctx2D,
-  cx: number,
-  cy: number,
-  angle: number,
-  length: number,
-  width: number,
-  fill: string,
-  ink = CSS.ink,
-): void {
-  const ca = Math.cos(angle);
-  const sa = Math.sin(angle);
-  // Perpendicular, for the tapered body.
-  const px = -sa;
-  const py = ca;
-  const p = new Path2D();
-  p.moveTo(cx + ca * length, cy + sa * length);
-  p.lineTo(cx + ca * length * 0.34 + px * width * 0.5, cy + sa * length * 0.34 + py * width * 0.5);
-  p.lineTo(cx - ca * width * 0.9 + px * width * 0.34, cy - sa * width * 0.9 + py * width * 0.34);
-  p.lineTo(cx - ca * width * 0.9 - px * width * 0.34, cy - sa * width * 0.9 - py * width * 0.34);
-  p.lineTo(cx + ca * length * 0.34 - px * width * 0.5, cy + sa * length * 0.34 - py * width * 0.5);
-  p.closePath();
-  c.save();
-  c.lineJoin = 'miter';
-  c.miterLimit = 4;
-  c.fillStyle = fill;
-  c.fill(p);
-  c.lineWidth = Math.max(1.5, width * 0.28);
-  c.strokeStyle = ink;
-  c.stroke(p);
   c.restore();
 }
 

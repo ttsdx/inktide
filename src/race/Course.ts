@@ -629,55 +629,27 @@ export class Course {
   /**
    * Place the checkpoint gates.
    *
-   * Two stages, because a gate straddling a corner apex is both ugly (two
-   * pylons skewed across the corridor) and unfair (its plane test gets
-   * sensitive to the line taken):
+   * Gate 0 is pinned to the start/finish line. The rest start out evenly spaced
+   * and are then each allowed to walk up to 38% of the gate spacing (~85 m) to
+   * find flatter water, paying `MOVE_COST` per metre moved.
    *
-   *   1. A *global* phase search. Gate 0 is pinned to the start/finish line,
-   *      and gates 1..n-1 stay perfectly evenly spaced but slide together by a
-   *      shared offset, chosen to minimise the sum of squared curvature under
-   *      them. Sliding as a set is what lets a gate escape a 176 m hairpin that
-   *      is longer than any per-gate nudge window could reach out of.
-   *   2. A per-gate nudge of up to 34 m on top, with a cost per metre moved so that on
-   *      a constant-radius arc — where every candidate is equally curved and
-   *      the search would otherwise pick arbitrarily — the gate stays put and
-   *      the spacing stays even.
+   * The trade is deliberate. A gate straddling a corner apex is both ugly (two
+   * pylons skewed across the corridor) and unfair — the plane test starts to
+   * depend on which line you took through the corner. At 1e-4 per metre the
+   * full 85 m walk costs the curvature equivalent of a 100 m radius, so a gate
+   * will step out of the 56 m hairpin or the 60 m chicane but will not shuffle
+   * along the 270 m sweeper where it makes no difference. Worst case the gaps
+   * end up in 140..310 m instead of a uniform 225 m, which sequential
+   * validation does not care about at all.
    */
   private placeCheckpoints(count: number): Checkpoint[] {
     const out: Checkpoint[] = [];
-
-    // --- stage 1: shared phase ---------------------------------------------
-    // Capped at a quarter of the gate spacing: gate 0 is pinned, so a bigger
-    // shift would leave a conspicuously short gap on one side of the line and a
-    // long one on the other.
-    const phaseLimit = 0.25 / count;
-    const phaseSteps = 96;
-    let bestPhase = 0;
-    let bestPhaseCost = Infinity;
-    for (let s = -phaseSteps; s <= phaseSteps; s++) {
-      const phase = (phaseLimit * s) / phaseSteps;
-      let cost = 0;
-      for (let i = 1; i < count; i++) {
-        const k = this.signedCurvatureAt(i / count + phase);
-        // Fourth power, not squared: the objective has to be dominated by the
-        // *worst* gate. With a squared cost the three unavoidable gates inside
-        // the 750 m sweeper drown out the one gate that could be walked out of
-        // the hairpin, and the search settles for leaving it on the apex.
-        cost += k * k * k * k;
-      }
-      if (cost < bestPhaseCost) {
-        bestPhaseCost = cost;
-        bestPhase = phase;
-      }
-    }
-
-    // --- stage 2: per-gate nudge -------------------------------------------
-    const searchSamples = Math.round(34 / this.ds);
+    const searchSamples = Math.round(((0.38 / count) * this.length) / this.ds);
     /** 1/m of curvature traded per metre of displacement from the nominal spot. */
-    const moveCost = 6e-5;
+    const moveCost = 1e-4;
 
     for (let i = 0; i < count; i++) {
-      const nominal = i === 0 ? 0 : Course.wrap(i / count + bestPhase);
+      const nominal = i / count;
       let t = nominal;
       if (i > 0) {
         const centre = Math.round(nominal * LUT);

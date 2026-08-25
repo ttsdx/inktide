@@ -144,7 +144,7 @@ export class Ocean {
         uRimFold: { value: new Vector2(0.2, 0.3) },
         uFoamBreakup: { value: 0.34 },
         uSparkleAmount: { value: 1.0 },
-        uSparkleDensity: { value: 0.42 },
+        uSparkleDensity: { value: 0.62 },
         uDetailStrength: { value: 1.0 },
         uFogNear: { value: 240 },
         uFogFar: { value: 1900 },
@@ -514,39 +514,78 @@ float fixedStep(float edge, float x, float w) {
 }
 
 /**
+ * ONE RIPPLE OCTAVE, BAND-LIMITED TO THE PIXEL.
+ *
+ * px is the world-space width of the pixel being shaded. An octave whose
+ * wavelength is only a few pixels across carries no shape a viewer can read,
+ * it only aliases, so it is faded out entirely rather than left to crawl. This
+ * is a mip chain computed analytically, and it is the reason one ripple field
+ * can serve both a two-metre close-up and a forty-metre overview: the close-up
+ * gets all five octaves, the overview automatically gets the coarse two.
+ *
+ * Steepness rather than amplitude is the input, because steepness (a*k) is
+ * what the normal actually sees and it is the quantity that has to stay
+ * bounded across octaves.
+ *
+ * Returns (gradient.x, gradient.z, height).
+ */
+vec3 rippleOctave(
+  vec2 p, float t, vec2 dir, float wavelength, float steep, float speed, float phase, float px
+) {
+  float w = 1.0 - smoothstep(wavelength * 0.11, wavelength * 0.34, px);
+  if (w <= 0.001) return vec3(0.0);
+  float k = 6.28318 / wavelength;
+  float ph = k * dot(dir, p) - sqrt(9.81 * k) * speed * t + phase;
+  return vec3(dir * (steep * w) * cos(ph), (steep / k) * w * sin(ph));
+}
+
+/**
  * PER-PIXEL DETAIL RIPPLE
  *
  * The disc has plenty of vertices inside ten metres, but the shading
- * coordinate is a *smooth* function of them, so the near field resolves into
- * one enormous flat region — the worst defect in the first capture. These
- * three ripples are evaluated per pixel purely to perturb the normal, giving
- * the bands pixel-scale form to bite on right up to the near plane.
+ * coordinate is a *smooth* function of them, so the near field resolves into a
+ * handful of enormous lozenges — the worst defect in the first two captures.
+ * This field is evaluated per pixel to add the form the vertex shader cannot
+ * afford to carry.
  *
- * They are deliberately NOT part of the Gerstner sum: gerstner.ts is the
- * shared contract with buoyancy, and a fourth octave of chop in the vertex
- * shader would alias at range for no gain. Directions are chosen well off the
- * six wave directions so the ripple never beats against the swell into moire.
+ * It is deliberately NOT part of the Gerstner sum: gerstner.ts is the shared
+ * contract with buoyancy, and a fourth octave of chop in the vertex shader
+ * would alias at range for no gain.
+ *
+ * Two things stop it reading as a pattern. Progressive domain warping — every
+ * finer octave is evaluated in a space dragged sideways by the coarser one's
+ * slope — because a handful of pure sinusoids at fixed directions tiles, and
+ * the third capture came back covered in a regular fish-scale lattice. And a
+ * very low frequency gust gate, because a real sea is not uniformly rippled:
+ * chop arrives in drifting cat's-paws, and gating on that is both truer and
+ * the cheapest possible decorrelator.
+ *
+ * Returns (gradient.x, gradient.z, height). The height feeds the shading
+ * coordinate as well as the gradient, so the ripple contributes its own form
+ * to the band shapes rather than only re-lighting the swell's.
  */
-vec2 detailGradient(vec2 p, float t) {
-  vec2 g = vec2(0.0);
+vec3 detailWave(vec2 p, float t, float px) {
+  float gust = 0.35 + 0.95 * noiseR(p * 0.0062 + vec2(t * 0.0035, -t * 0.0027));
 
-  const vec2 D0 = vec2(0.8607, 0.5091);
-  const vec2 D1 = vec2(-0.3894, 0.9211);
-  const vec2 D2 = vec2(0.6402, -0.7682);
+  vec3 a = rippleOctave(p, t, vec2( 0.8607,  0.5091), 11.30, 0.170, 1.00, 0.0, px);
+  vec2 q = p + a.xy * 2.6;
+  vec3 b = rippleOctave(q, t, vec2(-0.3894,  0.9211),  6.70, 0.145, 1.28, 2.1, px);
+  q += b.xy * 1.7;
+  vec3 c = rippleOctave(q, t, vec2( 0.6402, -0.7682),  3.90, 0.120, 1.55, 4.3, px);
+  q += c.xy * 1.1;
+  vec3 d = rippleOctave(q, t, vec2(-0.9563, -0.2924),  2.30, 0.098, 1.82, 1.2, px);
+  q += d.xy * 0.7;
+  vec3 e = rippleOctave(q, t, vec2( 0.2079,  0.9781),  1.31, 0.072, 2.10, 5.6, px);
+  // The last two octaves exist for the close-up shot alone: at three metres a
+  // 1.3 m ripple is still the size of a dinner plate on screen, and the water
+  // came back as flat cyan continents. Everywhere else px has already faded
+  // them to nothing, so they cost only the two smoothsteps that reject them.
+  q += e.xy * 0.5;
+  vec3 f = rippleOctave(q, t, vec2(-0.6820, 0.7314), 0.78, 0.055, 2.42, 3.0, px);
+  q += f.xy * 0.35;
+  vec3 g = rippleOctave(q, t, vec2( 0.9911, -0.1332), 0.44, 0.042, 2.75, 0.6, px);
 
-  // wavelength, amplitude, speed
-  const vec3 W0 = vec3(4.90, 0.062, 1.00);
-  const vec3 W1 = vec3(2.70, 0.034, 1.37);
-  const vec3 W2 = vec3(1.43, 0.017, 1.81);
-
-  float k0 = 6.28318 / W0.x;
-  g += D0 * (W0.y * k0) * cos(k0 * dot(D0, p) - sqrt(9.81 * k0) * W0.z * t);
-  float k1 = 6.28318 / W1.x;
-  g += D1 * (W1.y * k1) * cos(k1 * dot(D1, p) - sqrt(9.81 * k1) * W1.z * t + 2.1);
-  float k2 = 6.28318 / W2.x;
-  g += D2 * (W2.y * k2) * cos(k2 * dot(D2, p) - sqrt(9.81 * k2) * W2.z * t + 4.3);
-
-  return g;
+  return (a + b + c + d + e + f + g) * gust;
 }
 
 /**
@@ -561,9 +600,17 @@ vec2 detailGradient(vec2 p, float t) {
  * every threshold in this file off its tuned value.
  */
 float foamNoise(vec2 p, float t) {
-  float big = noiseR(p * 0.021 + vec2(t * 0.009, -t * 0.005));
-  float mid = noiseG(p * 0.098 - vec2(t * 0.028, t * 0.017));
-  float fine = noiseA(p * 0.29 + vec2(-t * 0.046, t * 0.038));
+  // Squash the sampling frame along the primary swell's direction of travel.
+  // Foam is torn off a crest and dragged down the face, so its grain runs
+  // *along* the crest line, not isotropically: an unsquashed noise gives round
+  // blobs of foam, which is the difference between spume and cotton wool. The
+  // direction is the first entry of the WAVES table, normalised.
+  vec2 dir = vec2(0.9550, 0.2965);
+  vec2 s = vec2(dot(p, dir) * 2.05, dot(p, vec2(-dir.y, dir.x)) * 0.48);
+
+  float big = noiseR(s * 0.021 + vec2(t * 0.009, -t * 0.005));
+  float mid = noiseG(s * 0.098 - vec2(t * 0.028, t * 0.017));
+  float fine = noiseA(s * 0.29 + vec2(-t * 0.046, t * 0.038));
   return (big * 0.46 + mid * 0.34 + fine * 0.20) - 0.5;
 }
 
@@ -618,11 +665,38 @@ void main() {
   // -----------------------------------------------------------------------
   // 0. SURFACE NORMAL
   // -----------------------------------------------------------------------
-  // The detail ripple only exists inside the detail-fade window; beyond it the
-  // ripple is sub-pixel and would only add shimmer.
-  float detailAmt = uDetailStrength * vDetail * vDetail;
-  vec2 dg = detailGradient(p, uTime) * detailAmt;
-  vec3 N = normalize(vec3(vNormal.x - dg.x, vNormal.y, vNormal.z - dg.y));
+  // World-space width of this pixel. Every scale-dependent decision below is
+  // made against it rather than against distance, because distance is the
+  // wrong variable: a pixel forty metres away in a top-down shot and a pixel
+  // forty metres away in a grazing shot cover wildly different amounts of
+  // water, and it is the amount of water that decides what can be resolved.
+  float px = max(length(fwidth(p)), 1e-4);
+
+  /**
+   * THE PRE-FILTER.
+   *
+   * How much of the band structure this pixel can actually hold. Not optional,
+   * and the single least obvious thing in this file.
+   *
+   * At a grazing angle the disc's rings fall below a pixel, so multisampling
+   * resolves several triangles into every pixel and the frame's own resolve
+   * averages the bands for us — and the average of a navy trough, a mid blue,
+   * a cyan crest and white foam is slate grey. Measured on the crest close-up:
+   * rgb(65,89,101) with 4x MSAA against rgb(57,186,201) for the same water
+   * with it off. Nothing in the shading was wrong; there was simply more
+   * contrast in the pixel than the pixel could carry.
+   *
+   * So we do the averaging ourselves, towards a colour we chose. Distant and
+   * grazing water settles into a flat, saturated painted band instead of dirt,
+   * which is what the reference art does anyway — a background painter does not
+   * render every wave at the horizon, they paint one flat shape.
+   */
+  float resolve = 1.0 - smoothstep(0.35, 2.2, px);
+  float detail = min(vDetail, resolve);
+
+  float detailAmt = uDetailStrength * detail;
+  vec3 dw = detailWave(p, uTime, px) * detailAmt;
+  vec3 N = normalize(vec3(vNormal.x - dw.x, vNormal.y, vNormal.z - dw.y));
   vec3 V = normalize(cameraPosition - vWorldPos);
   float ndv = clamp(dot(N, V), 0.0, 1.0);
   float ndl = dot(N, SUN_DIR);
@@ -647,13 +721,38 @@ void main() {
   //   heightT total displaced height, which puts the chop back in near camera.
   // -----------------------------------------------------------------------
   float formT = clamp((ndl - 0.16) / 0.78, 0.0, 1.0);
-  float band = formT * uBandMix.x + vSwell * uBandMix.y + vHeight * uBandMix.z;
 
-  float b1 = hardStep(uBands.x, band);
-  float b2 = hardStep(uBands.y, band);
+  // Past the detail-fade window the surface normal is carried by triangles
+  // tens of metres wide, so N·L stops describing a wave and starts describing
+  // the tessellation — which is what put the scratchy dark streaks through the
+  // 50–150 m band of the second capture. Roll the coordinate's weight over to
+  // the swell, which is smooth at any triangle size, as detail dies. Total
+  // weight is conserved so the band thresholds do not have to move with it.
+  float formMix = mix(0.40, 1.0, detail);
+  float swellW = uBandMix.y + uBandMix.x * (1.0 - formMix);
+  float bandBase = vSwell * swellW + vHeight * uBandMix.z;
+  float band = formT * uBandMix.x * formMix + bandBase + dw.z * 0.19;
+
+  // The same coordinate with the per-pixel ripple removed. A painted shadow
+  // shape is large and simple — the detail lives in the light. Cutting the
+  // darkest tone against the full ripple instead produced the swarm of little
+  // dark commas that covers the foreground of the third capture, so the deep
+  // band is cut almost entirely against the broad surface and each successive
+  // band picks up more of the detail.
+  float formBroad = clamp((dot(normalize(vNormal), SUN_DIR) - 0.16) / 0.78, 0.0, 1.0);
+  float bandBroad = formBroad * uBandMix.x * formMix + bandBase;
+
+  float b1 = hardStep(uBands.x, mix(band, bandBroad, 0.62));
+  float b2 = hardStep(uBands.y, mix(band, bandBroad, 0.35));
   float b3 = hardStep(uBands.z, band);
 
-  vec3 col = uDeep;
+  // The deepest tone is lifted a fifth of the way towards the mid blue. Raw
+  // waterDeep does not survive the composite: the grade pushes saturation to
+  // 1.14, which drives its already tiny red channel negative and clips it, so
+  // the trough measured as rgb(0,1,89) — an almost-black hole punched in the
+  // surface rather than the bottom band of an ocean. The lift is still made of
+  // palette colours; it only stops the pipeline from eating one of them.
+  vec3 col = mix(uDeep, uMid, 0.2);
   col = mix(col, uMid, b1);
   col = mix(col, uShallow, b2);
   col = mix(col, uCrest, b3);
@@ -665,9 +764,15 @@ void main() {
   // *separate layer* over the band ramp rather than another threshold on the
   // same coordinate, so it can cross band boundaries — which is what makes a
   // wave face read as one lit plane instead of a stack of stripes.
+  //
+  // It has to be an absolute colour, not a tint of whatever is underneath.
+  // Mixing warm cream into the deep navy band and scaling up — the obvious
+  // thing, and what the previous pass did — produced the olive-khaki crest
+  // tops in the close-up capture, because desaturating a blue towards a cream
+  // passes straight through grey-green on the way.
   // -----------------------------------------------------------------------
-  float sunPlane = hardStep(0.80, formT);
-  col = mix(col, mix(col, uSunTint, 0.22) * 1.18, sunPlane);
+  float sunPlane = hardStep(0.86, formT);
+  col = mix(col, mix(uCrest, uSunTint, 0.28), sunPlane * 0.82);
 
   // -----------------------------------------------------------------------
   // 3. HORIZON / FRESNEL LIFT
@@ -700,8 +805,11 @@ void main() {
   // -----------------------------------------------------------------------
   float rimLo = hardStep(uRimFold.x, vFold);
   float rimHi = hardStep(uRimFold.y, vFold);
-  float contour = clamp(rimLo - rimHi, 0.0, 1.0) * vDetail;
-  col = mix(col, uCrest * 1.25, contour * 0.85);
+  float crestGate = smoothstep(0.34, 0.72, vSwell);
+  // Gated on the swell as well as the fold, or the contour appears on every
+  // ripple in the trough too and the surface fills with cyan confetti.
+  float contour = clamp(rimLo - rimHi, 0.0, 1.0) * detail * crestGate;
+  col = mix(col, uCrest * 1.3, contour * 0.8);
 
   // -----------------------------------------------------------------------
   // 5. FOAM SOURCE A — CREST FOAM
@@ -714,8 +822,13 @@ void main() {
   // adding means foam needs a genuine fold AND a genuine crest, which is also
   // the physical condition for a wave to actually break.
   // -----------------------------------------------------------------------
+  // Apply the pre-filter to the painted body before any foam goes on top.
+  // Foam is excluded on purpose: white on blue survives averaging perfectly
+  // well, and the far field needs its crest highlights to keep a silhouette.
+  vec3 flatTone = mix(uMid, uShallow, 0.55);
+  col = mix(flatTone, col, mix(0.28, 1.0, resolve));
+
   float fn = foamNoise(p, uTime);
-  float crestGate = smoothstep(0.42, 0.78, vSwell);
   float crestSignal = vFold * crestGate;
 
   // -----------------------------------------------------------------------
@@ -806,9 +919,9 @@ void main() {
   // whole silhouette. Never two, because two tones of white on blue is a
   // sticker; the contour is what makes it look drawn.
   // -----------------------------------------------------------------------
-  float foamSignal = max(max(crestSignal * 1.55, wake * 1.35), max(contact, depthFoam));
+  float foamSignal = max(max(crestSignal * 1.85, wake * 1.35), max(contact, depthFoam));
   // Distant foam loses its detail rather than boiling into noise.
-  foamSignal *= mix(0.55, 1.0, vDetail);
+  foamSignal *= mix(0.55, 1.0, detail);
 
   float torn = foamSignal - fn * uFoamBreakup;
   float foamEdge = hardStep(uFoamFold, torn);
@@ -834,14 +947,19 @@ void main() {
 
   float bigGlint;
   float glint = glitter(p, uTime, uSparkleDensity, bigGlint);
-  float glitterMask = (glint * 0.6 + bigGlint * 1.0) * specGate * uSparkleAmount * vDetail;
+  float glitterMask = (glint * 0.6 + bigGlint * 1.0) * specGate * uSparkleAmount * detail;
   col += glitterMask * uSunTint * 0.85 * (1.0 - foamEdge);
 
-  // The broad sun path: a hard-edged sheet of light on the water between the
-  // camera and the sun, quantised into two steps so it stays a painted shape.
-  float path = fixedStep(0.42, specRaw * 5.0, 0.06) * 0.5
-             + fixedStep(0.85, specRaw * 5.0, 0.05) * 0.5;
-  col = mix(col, uFoam, path * 0.3 * vDetail * (1.0 - foamEdge));
+  // The broad sun path. Two discrete steps, and each step is an ocean-family
+  // colour rather than white: mixing towards white over blue gave the pale
+  // lavender smear in the into-sun capture, which is the one place in the
+  // frame that must not look washed out.
+  float pathRaw = specRaw * 5.0;
+  float pathA = fixedStep(0.30, pathRaw, 0.05);
+  float pathB = fixedStep(0.78, pathRaw, 0.04);
+  float pathFade = detail * (1.0 - foamEdge);
+  col = mix(col, uCrest, pathA * 0.42 * pathFade);
+  col = mix(col, mix(uFoam, uSunTint, 0.35), pathB * 0.7 * pathFade);
 
   // -----------------------------------------------------------------------
   // 11. HAZE
@@ -851,15 +969,30 @@ void main() {
   // -----------------------------------------------------------------------
   float fogT = clamp((vViewDist - uFogNear) / max(uFogFar - uFogNear, 1.0), 0.0, 1.0);
   fogT = floor(fogT * 6.0 + 0.4) / 6.0;
-  vec3 hazeCol = mix(uHorizon, uShallow, 0.42);
+  // The haze target has to stay an ocean colour. Fading towards the sky's own
+  // horizon band — which is a warm sand — took the far water through grey and
+  // came back khaki, and it also dissolved the horizon line the sky depends on
+  // for its silhouette. A pale cyan with only a hint of the horizon's warmth
+  // keeps the family and keeps the line.
+  vec3 hazeCol = mix(mix(uShallow, uSkyTint, 0.55), uHorizon, 0.16);
   col = mix(col, hazeCol, fogT * 0.9);
 
   outColor = vec4(col, 1.0);
 
-  // The ocean writes into the edge buffer with a flattened normal: we want the
-  // Sobel pass to find the waterline against boats, but not to trace every
-  // wave crest, which would fill the frame with lines.
-  vec3 viewN = normalize((viewMatrix * vec4(mix(vec3(0.0, 1.0, 0.0), N, 0.25), 0.0)).xyz);
+  // The ocean writes into the edge buffer with a heavily flattened normal.
+  //
+  // This is not a nicety. The Sobel pass inks any pixel where the packed
+  // normal changes fast, and the per-pixel ripple above changes the normal
+  // every single pixel at a grazing angle — feeding it the shading normal
+  // turned the whole lower half of the ultra-quality frame into a wash of ink
+  // mixed into the water, which measured as a slate grey where the capture
+  // should have been cyan. Writing a nearly-constant up vector means the water
+  // never lines against itself, while a hull still stands out against it by a
+  // mile and gets the waterline the pass exists for. Distant water is flattened
+  // completely, because out there the vertex normal alone swings from one
+  // triangle to the next.
+  vec3 edgeN = mix(vec3(0.0, 1.0, 0.0), normalize(vNormal), 0.1 * detail);
+  vec3 viewN = normalize((viewMatrix * vec4(edgeN, 0.0)).xyz);
   float viewDepth = -(viewMatrix * vec4(vWorldPos, 1.0)).z;
   outNormalDepth = vec4(viewN * 0.5 + 0.5, clamp(viewDepth / uCameraFar, 0.0, 1.0));
 }

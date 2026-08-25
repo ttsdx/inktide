@@ -46,6 +46,9 @@ export interface PipelineQuality {
   bloomScale: number;
 }
 
+/** Bloom mix at full quality. Kept as a constant so a harness sweep survives. */
+const BLOOM_STRENGTH = 0.42;
+
 export const QUALITY_PRESETS: Record<'low' | 'medium' | 'high' | 'ultra', PipelineQuality> = {
   low: { pixelRatio: 1.0, samples: 0, bloom: false, interiorLines: false, bloomScale: 4 },
   medium: { pixelRatio: 1.0, samples: 0, bloom: true, interiorLines: true, bloomScale: 4 },
@@ -158,13 +161,24 @@ export class CelPipeline {
         tColor: { value: null },
         tNormalDepth: { value: null },
         uTexel: { value: new Vector2() },
-        uNormalThreshold: { value: 0.34 },
-        uDepthThreshold: { value: 0.00055 },
-        uSilhouetteReject: { value: 0.0055 },
-        uLineStrength: { value: 0.85 },
+        // A Sobel over unit normals maxes out near 5.7 (a 180-degree flip across
+        // the kernel). 1.05 is roughly a 30-degree bend across three pixels:
+        // above it and the ocean's ripple normals draw a line on every crest,
+        // below it and the join between a deck and a cockpit is missed.
+        uNormalThreshold: { value: 1.05 },
+        // Relative depth *curvature* per pixel. A crease where one surface
+        // passes in front of another gives a step of order (gap / distance); a
+        // smooth surface, however steeply it is sloped, gives near zero.
+        uDepthThreshold: { value: 0.02 },
+        // Curvature this large cannot be a crease — it is one surface ending
+        // and another beginning, which the hull shell has already inked.
+        uSilhouetteReject: { value: 0.45 },
+        uLineStrength: { value: 0.95 },
         uInk: { value: PALETTE.ink.clone() },
         uCameraFar: { value: 4000 },
         uScale: { value: 1.0 },
+        /** Debug: output the isolated line mask instead of the graded frame. */
+        uLineMask: { value: 0 },
       },
       'SobelInteriorLines',
     );
@@ -192,8 +206,8 @@ export class CelPipeline {
       {
         tColor: { value: null },
         tBloom: { value: null },
-        uBloomStrength: { value: 0.42 },
-        uVignette: { value: 0.34 },
+        uBloomStrength: { value: BLOOM_STRENGTH },
+        uVignette: { value: 0.2 },
         uSaturation: { value: 1.14 },
         uContrast: { value: 1.06 },
         uExposure: { value: 1.0 },
@@ -234,6 +248,10 @@ export class CelPipeline {
     if (samplesChanged || scaleChanged) {
       this.createTargets(this.fbSize.x, this.fbSize.y);
     }
+    // render() only ever forces the strength to zero, so that a tuning sweep on
+    // uBloomStrength is not overwritten on the next frame; the tier change is
+    // the one place the value has to be put back.
+    this.compositePass.uniforms.uBloomStrength.value = this.quality.bloom ? BLOOM_STRENGTH : 0;
   }
 
   get normalDepthTexture() {
@@ -242,6 +260,10 @@ export class CelPipeline {
 
   setDebugView(mode: number): void {
     this.compositePass.uniforms.uDebugView.value = mode;
+    // Mode 3 is produced inside the Sobel pass rather than the composite,
+    // because the line mask only exists there; the composite then passes it
+    // through ungraded so the taps show the raw mask, not a graded version of it.
+    this.sobelPass.uniforms.uLineMask.value = mode === 3 ? 1 : 0;
   }
 
   /** Poke a single pass uniform by name. Used for tuning sweeps from the harness. */
@@ -363,7 +385,7 @@ export class CelPipeline {
     cu.tColor.value = colorTex;
     cu.tBloom.value = bloomTex;
     cu.tDebug.value = this.main.textures[1];
-    cu.uBloomStrength.value = this.quality.bloom ? 0.42 : 0;
+    if (!this.quality.bloom) cu.uBloomStrength.value = 0;
     (cu.uTexel.value as Vector2).copy(texel);
     cu.uTime.value = elapsed;
     this.compositePass.render(r, null);
@@ -397,12 +419,27 @@ export class CelPipeline {
 /**
  * Sobel over the packed normal/depth buffer.
  *
- * Two gradients are computed: one over the decoded view normal (catches
- * creases where the surface bends but stays continuous in depth) and one over
- * linear depth (catches overlaps). The depth gradient is then used *negatively*
- * — a large depth step means we are at a silhouette, where the inverted-hull
- * shell has already drawn ink, so we suppress the Sobel line there. That is the
- * whole trick to running both line systems without doubling.
+ * Two gradients are computed: one over the decoded view normal (catches creases
+ * where the surface bends but stays continuous in depth) and one over linear
+ * depth (catches overlaps).
+ *
+ * KEEPING THE TWO LINE SYSTEMS FROM DOUBLING UP is the hard part, and it takes
+ * two independent mechanisms:
+ *
+ *  1. Ink pixels written by the inverted-hull shells carry a zero normal (see
+ *     writeInkNormalDepth). Any *neighbour* tap carrying one is replaced by the
+ *     centre sample, so the ink band contributes no gradient at all. This is
+ *     what handles thin geometry — a mast, a rider's forearm — where the front
+ *     and back surfaces are millimetres apart and no depth heuristic can tell a
+ *     silhouette from a crease.
+ *
+ *  2. The depth gradient is normalised by the centre depth, making it a
+ *     *relative* step that is scale invariant, and a large relative step is
+ *     read as a silhouette and suppressed. Absolute thresholds cannot work
+ *     here: the same 20 cm crease is 0.00005 of the far plane at 3 m and at
+ *     300 m, but at 300 m it is a tenth of a pixel wide. The old absolute
+ *     uSilhouetteReject of 0.0055 could only be reached by geometry more than
+ *     22 m deep, so in practice it never fired at all.
  */
 const SOBEL_FRAG = /* glsl */ `
 precision highp float;
@@ -417,28 +454,48 @@ uniform float uDepthThreshold;
 uniform float uSilhouetteReject;
 uniform float uLineStrength;
 uniform float uScale;
+uniform float uLineMask;
 uniform vec3 uInk;
 
 vec3 decodeNormal(vec4 nd) { return nd.xyz * 2.0 - 1.0; }
+
+bool optedOut(vec4 s) { return dot(s.xyz, s.xyz) < 0.0001; }
+
+/**
+ * Resolve an opposite pair of taps.
+ *
+ * Where one of the pair opted out, it is replaced by the LINEAR EXTRAPOLATION
+ * of its partner through the centre, not by the centre itself. Substituting the
+ * centre leaves a one-sided gradient at the boundary, which puts a line one
+ * pixel inside every ink band on every curved surface; extrapolating asserts
+ * "this surface carries on", which is the only substitution that makes the ink
+ * genuinely invisible to both the gradient and the curvature terms below.
+ */
+void resolve(vec2 uvA, vec2 uvB, vec4 c, out vec4 a, out vec4 b) {
+  a = texture(tNormalDepth, uvA);
+  b = texture(tNormalDepth, uvB);
+  bool oa = optedOut(a);
+  bool ob = optedOut(b);
+  if (oa && ob) { a = c; b = c; }
+  else if (oa) { a = 2.0 * c - b; }
+  else if (ob) { b = 2.0 * c - a; }
+}
 
 void main() {
   vec2 t = uTexel * uScale;
   vec4 c  = texture(tNormalDepth, vUv);
 
-  // Sky and cleared pixels have depth 0 and a zero normal; never line them.
-  if (dot(c.xyz, c.xyz) < 0.0001) {
-    outColor = texture(tColor, vUv);
+  // Sky, ink and anything else that opted out has a zero normal; never line it.
+  if (optedOut(c)) {
+    outColor = uLineMask > 0.5 ? vec4(1.0) : texture(tColor, vUv);
     return;
   }
 
-  vec4 l  = texture(tNormalDepth, vUv + vec2(-t.x, 0.0));
-  vec4 r  = texture(tNormalDepth, vUv + vec2( t.x, 0.0));
-  vec4 u  = texture(tNormalDepth, vUv + vec2(0.0,  t.y));
-  vec4 d  = texture(tNormalDepth, vUv + vec2(0.0, -t.y));
-  vec4 tl = texture(tNormalDepth, vUv + vec2(-t.x,  t.y));
-  vec4 tr = texture(tNormalDepth, vUv + vec2( t.x,  t.y));
-  vec4 bl = texture(tNormalDepth, vUv + vec2(-t.x, -t.y));
-  vec4 br = texture(tNormalDepth, vUv + vec2( t.x, -t.y));
+  vec4 l, r, u, d, tl, br, tr, bl;
+  resolve(vUv + vec2(-t.x, 0.0), vUv + vec2( t.x, 0.0), c, l, r);
+  resolve(vUv + vec2(0.0,  t.y), vUv + vec2(0.0, -t.y), c, u, d);
+  resolve(vUv + vec2(-t.x,  t.y), vUv + vec2( t.x, -t.y), c, tl, br);
+  resolve(vUv + vec2( t.x,  t.y), vUv + vec2(-t.x, -t.y), c, tr, bl);
 
   // --- normal gradient (Sobel over the 3 normal channels) ---
   vec3 gxN = decodeNormal(tl) + 2.0 * decodeNormal(l) + decodeNormal(bl)
@@ -447,27 +504,43 @@ void main() {
            - decodeNormal(bl) - 2.0 * decodeNormal(d) - decodeNormal(br);
   float normalEdge = sqrt(dot(gxN, gxN) + dot(gyN, gyN));
 
-  // --- depth gradient ---
-  float gxD = tl.w + 2.0 * l.w + bl.w - tr.w - 2.0 * r.w - br.w;
-  float gyD = tl.w + 2.0 * u.w + tr.w - bl.w - 2.0 * d.w - br.w;
-  float depthEdge = sqrt(gxD * gxD + gyD * gyD);
+  // --- depth CURVATURE, not depth gradient -------------------------------
+  //
+  // A Sobel on depth cannot tell "one surface seen nearly edge-on" from "two
+  // surfaces overlapping": both produce an enormous gradient. That is why the
+  // gradient version drew an ink line along the far side of every wave crest in
+  // the ocean, all the way to the horizon, and no amount of threshold tuning
+  // fixed it — the water's gradient at a grazing crest genuinely exceeds a
+  // hull's gradient at a real overlap.
+  //
+  // The second difference does distinguish them, because a plane of ANY slope
+  // has zero curvature. Normalising by the centre depth then makes the measure
+  // scale invariant, so the same crease reads the same at 3 m and at 100 m.
+  float curve = abs(c.w * 2.0 - l.w - r.w)
+              + abs(c.w * 2.0 - u.w - d.w)
+              + 0.5 * (abs(c.w * 2.0 - tl.w - br.w) + abs(c.w * 2.0 - tr.w - bl.w));
+  float relDepth = curve / max(c.w, 1e-5);
 
-  // Depth thresholds have to scale with distance or a far-away hull becomes one
-  // solid black blob while a near one shows nothing.
-  float depthScale = 1.0 / max(c.w, 0.002);
+  float nLine = smoothstep(uNormalThreshold, uNormalThreshold * 1.9, normalEdge);
+  float dLine = smoothstep(uDepthThreshold, uDepthThreshold * 2.2, relDepth);
 
-  float nLine = smoothstep(uNormalThreshold, uNormalThreshold + 0.5, normalEdge);
-  float dLine = smoothstep(uDepthThreshold, uDepthThreshold * 3.0, depthEdge * depthScale * 0.02);
-
-  // Suppress where the inverted hull already inked the silhouette.
-  float silhouette = smoothstep(uSilhouetteReject, uSilhouetteReject * 2.5, depthEdge);
+  // A relative step this large is a silhouette, not a crease.
+  float silhouette = smoothstep(uSilhouetteReject, uSilhouetteReject * 1.8, relDepth);
   float line = max(nLine, dLine) * (1.0 - silhouette);
 
-  // Fade interior lines out with distance; at 300 m they are sub-pixel noise.
-  line *= 1.0 - smoothstep(0.045, 0.16, c.w);
+  // Fade interior lines out with distance. Beyond ~120 m a crease is thinner
+  // than a pixel and the line is just aliasing noise that crawls when the boat
+  // moves; the hull shells keep drawing the silhouettes out to the horizon.
+  line *= 1.0 - smoothstep(0.02, 0.075, c.w);
+  line = clamp(line * uLineStrength, 0.0, 1.0);
+
+  if (uLineMask > 0.5) {
+    outColor = vec4(vec3(1.0 - line), 1.0);
+    return;
+  }
 
   vec4 col = texture(tColor, vUv);
-  col.rgb = mix(col.rgb, uInk, clamp(line * uLineStrength, 0.0, 1.0));
+  col.rgb = mix(col.rgb, uInk, line);
   outColor = col;
 }
 `;
@@ -561,6 +634,8 @@ void main() {
     vec4 nd = texture(tDebug, vUv);
     if (uDebugView < 1.5) { outColor = vec4(nd.rgb, 1.0); return; }
     if (uDebugView < 2.5) { outColor = vec4(vec3(nd.w * 12.0), 1.0); return; }
+    // Mode 3: tColor already holds the isolated mask, courtesy of uLineMask.
+    if (uDebugView < 3.5) { outColor = vec4(texture(tColor, vUv).rgb, 1.0); return; }
   }
 
   vec3 c = texture(tColor, vUv).rgb * uExposure;

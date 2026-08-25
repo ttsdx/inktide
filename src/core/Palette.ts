@@ -29,6 +29,13 @@ export const PALETTE = {
   waterCrest: hex(0x6fe0ef),
   foam: hex(0xeefaff),
   foamShade: hex(0xb7e6f7),
+  /**
+   * What distant water fades into. Distinct from `skyHorizon`: hazing the
+   * ocean towards the sky's warm sand turns the whole band above the waterline
+   * into a desert strip, which is the single most damaging thing that can
+   * happen to a frame that is 60% water. Water recedes into pale cyan.
+   */
+  waterHaze: hex(0x8fd2ea),
 
   // ---- Sky ----
   skyZenith: hex(0x0f4fae),
@@ -53,10 +60,18 @@ export const PALETTE = {
   racerDark: [hex(0x8f1436), hex(0x8f4f06), hex(0x452a99), hex(0x6c8a12)],
 
   // ---- Rider palette ----
+  //
+  // The suit tones are deliberately much lighter than a "navy racing suit"
+  // instinct suggests. The cel ramp multiplies the base colour by 0.34 in its
+  // shadow band, so a genuinely dark base lands below the point where the bands
+  // are distinguishable and the rider renders as a black blob against the
+  // water. Captured frames settled these at a mid slate: dark enough to read as
+  // a suit, light enough that all four bands are visible on a 1.7 m character
+  // that is only a couple of hundred pixels tall.
   skin: hex(0xffd2a8),
   skinShade: hex(0xd99a68),
-  suit: hex(0x1b2a4d),
-  suitLit: hex(0x33507f),
+  suit: hex(0x4a6ba3),
+  suitLit: hex(0x82a8dc),
   visor: hex(0x59f0ff),
 
   // ---- UI ----

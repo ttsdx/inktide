@@ -212,14 +212,28 @@ export function makeNoiseSource(
   return s;
 }
 
-/** Connect a series of nodes and return the last one. */
-export function chain<T extends AudioNode>(first: AudioNode, ...rest: AudioNode[]): T {
+const isNode = (n: AudioNode | AudioParam): n is AudioNode =>
+  typeof (n as AudioNode).connect === 'function';
+
+/**
+ * Connect a series of nodes and return the last node in the chain.
+ *
+ * An `AudioParam` is accepted as the final link so modulation routings (an LFO
+ * into a gain's `gain`) read the same way as audio routings. Feature-detected
+ * rather than `instanceof AudioParam`, because the global constructor is not
+ * guaranteed to exist everywhere the audio graph is allowed to fail softly.
+ */
+export function chain(first: AudioNode, ...rest: (AudioNode | AudioParam)[]): AudioNode {
   let node = first;
   for (const next of rest) {
+    if (!isNode(next)) {
+      node.connect(next);
+      break;
+    }
     node.connect(next);
     node = next;
   }
-  return node as T;
+  return node;
 }
 
 // ---------------------------------------------------------------------------

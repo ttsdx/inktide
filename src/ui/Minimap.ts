@@ -1,6 +1,6 @@
 import { CSS } from '../core/Palette.ts';
 import {
-  clamp01,
+  approach,
   drawText,
   panelPath,
   racerColor,
@@ -111,8 +111,8 @@ export class Minimap {
 
     // --- frame -------------------------------------------------------------
     c.save();
-    c.globalAlpha = 0.72;
-    c.fillStyle = CSS.waterDeep;
+    c.globalAlpha *= 0.84;
+    c.fillStyle = CSS.ink;
     c.fill(frame);
     c.restore();
 
@@ -210,7 +210,7 @@ export class Minimap {
             let delta = target - this.arrow;
             while (delta > Math.PI) delta -= Math.PI * 2;
             while (delta < -Math.PI) delta += Math.PI * 2;
-            this.arrow += delta * (1 - Math.exp(-14 * dt));
+            this.arrow = approach(this.arrow, this.arrow + delta, 14, dt);
           }
           triangle(c, bx, by, this.arrow, size * 0.085, color, CSS.ink, Math.max(2, size * 0.022));
         } else {
@@ -231,8 +231,12 @@ export class Minimap {
     // --- frame outline on top so no mark can bleed over the edge ----------
     c.lineJoin = 'miter';
     c.miterLimit = 3;
-    c.lineWidth = Math.max(2.5, size * 0.022);
+    c.lineWidth = Math.max(4, size * 0.03);
     c.strokeStyle = CSS.ink;
+    c.stroke(frame);
+    // Inner cyan hairline: the ink frame alone disappears against deep water.
+    c.lineWidth = Math.max(1.5, size * 0.01);
+    c.strokeStyle = CSS.inkSoft;
     c.stroke(frame);
 
     // North tick: the only orientation cue a fixed map needs.
@@ -275,21 +279,3 @@ function computeBounds(path: readonly MinimapPoint[]): Bounds {
   };
 }
 
-/** Exposed for the HUD's layout maths; keeps the magic 0.12 in one place. */
-export const MINIMAP_PADDING_FRAC = 0.12;
-
-/** Utility for callers that only have a 0..1 lap progress and want a blip. */
-export function pointAtProgress(
-  path: readonly MinimapPoint[],
-  progress01: number,
-): MinimapPoint | null {
-  if (path.length === 0) return null;
-  const t = clamp01(progress01) * path.length;
-  const i = Math.min(path.length - 1, Math.floor(t));
-  const j = (i + 1) % path.length;
-  const f = t - i;
-  return {
-    x: path[i].x + (path[j].x - path[i].x) * f,
-    z: path[i].z + (path[j].z - path[i].z) * f,
-  };
-}

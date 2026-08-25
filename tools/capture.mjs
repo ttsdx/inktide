@@ -291,7 +291,11 @@ function applyShot({ shot, from }) {
     const c = shot.camera;
     if (c.mode === 'free') h.setFreeCamera(c.position, c.target);
     else if (c.mode === 'orbit') h.setOrbit(c.angle ?? 0, c.radius ?? 26, c.height ?? 9);
-    else h.setCamera(c.mode);
+    else if (c.mode === 'boat') {
+      // Framed relative to the boat's own heading, so a shot stays composed
+      // wherever on the circuit the racer has got to by the target time.
+      h.frameBoat(c.index ?? 0, c.yaw ?? 0, c.pitch ?? 0.2, c.distance ?? 8, c.lookHeight ?? 1.0);
+    } else h.setCamera(c.mode);
   }
 }
 
