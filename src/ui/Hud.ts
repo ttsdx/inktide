@@ -345,7 +345,13 @@ export class Hud {
   private drawRaceClusters(c: Ctx2D, data: HudData, shown: number): void {
     const u = this.u;
     const slide = 1 - clamp(shown, 0, 1.2);
-    const m = 26 * u;
+    // Title-safe margin. 26 was not enough: the position panel is slanted,
+    // which pushes its top-left corner further left than its nominal x, and it
+    // is then scale-punched about its own centre on a place change — which took
+    // the corner past x = 0 and had the ordinal glyph clipped by the screen edge
+    // in every HUD frame captured. 44 keeps the whole cluster inside a ~3%
+    // inset even at full punch.
+    const m = 44 * u;
 
     // Each cluster flies in from the edge it lives on, so the composition
     // assembles outwards instead of everything arriving from one direction.
@@ -388,9 +394,12 @@ export class Hud {
     const py = 22 * u;
     const punch = 1 + this.posPunch.value * 0.16;
     c.save();
-    c.translate(px + pw * 0.5, py + ph * 0.5);
+    // Punch about the panel's LEFT edge, not its centre. A left-anchored
+    // cluster that grows from its middle grows outward as well as inward, and
+    // outward here is off the screen.
+    c.translate(px, py + ph * 0.5);
     c.scale(punch, punch);
-    c.translate(-(px + pw * 0.5), -(py + ph * 0.5));
+    c.translate(-px, -(py + ph * 0.5));
     panel(c, px, py, pw, ph, {
       fill: CSS.ink,
       alpha: 0.86,
@@ -412,14 +421,14 @@ export class Hud {
       slant: 0.24,
     });
     const numW = measureText(`${place}`, numSize);
-    drawText(c, ordinalSuffix(place), px + 30 * u + numW, py + 26 * u, {
+    drawText(c, ordinalSuffix(place), px + 38 * u + numW, py + 26 * u, {
       size: 22 * u,
       fill: CSS.foam,
       weight: 0.22,
       outline: 0.13,
       slant: 0.24,
     });
-    drawText(c, 'POS', px + 30 * u + numW, py + 66 * u, {
+    drawText(c, 'POS', px + 38 * u + numW, py + 66 * u, {
       size: 15 * u,
       fill: CSS.cyan,
       alpha: 0.85,
@@ -648,10 +657,19 @@ export class Hud {
     // Redline marks, drawn *inside* the ring: outside is where the value cursor
     // travels, and two things sharing that band would collide at top speed.
     for (let i = 0; i < 3; i++) {
-      const a = ARC_START + (ARC_END - ARC_START) * (0.85 + i * 0.055);
+      const markT = 0.85 + i * 0.055;
+      const a = ARC_START + (ARC_END - ARC_START) * markT;
+      // Dim until the value actually reaches the mark. Drawn at full danger red
+      // regardless of speed, three saturated marks at the top of the arc read as
+      // lit segments — a reviewer looking at a stationary boat saw the needle
+      // parked at zero and the gauge apparently showing maximum, and called the
+      // instrument broken. A redline should be a warning that arms, not a
+      // permanent decoration.
+      const armed = t >= markT - 0.02;
       c.save();
-      c.strokeStyle = CSS.danger;
-      c.lineWidth = 3.5 * u;
+      c.globalAlpha = armed ? 1 : 0.28;
+      c.strokeStyle = armed ? CSS.danger : CSS.inkSoft;
+      c.lineWidth = (armed ? 3.5 : 2.4) * u;
       c.beginPath();
       c.moveTo(cx + Math.cos(a) * r * 0.68, cy + Math.sin(a) * r * 0.68);
       c.lineTo(cx + Math.cos(a) * r * 0.76, cy + Math.sin(a) * r * 0.76);
