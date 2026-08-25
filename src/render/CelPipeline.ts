@@ -785,6 +785,7 @@ uniform float uTime;
 
 const vec3 INK = ${glslVec3(PALETTE.ink)};
 const vec3 PAPER = ${glslVec3(PALETTE.skyHaze)};
+const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 
 vec3 linearToSRGB(vec3 c) {
   return mix(c * 12.92, 1.055 * pow(max(c, 0.0), vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c));
@@ -814,23 +815,63 @@ void main() {
   // which is the single most common way a cel look dies. At 0.22 anything under
   // about 1.6 passes through nearly untouched and only genuine over-range —
   // foam, sparks, gate glow — gets rolled off.
-  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  float l = dot(c, LUMA);
   float lm = l / (1.0 + l * 0.22);
   c *= lm / max(l, 0.0001);
 
-  float g = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  float g = dot(c, LUMA);
 
   // Split tone before saturation, so the tint rides on the paint rather than
   // being amplified by it. Shadows carry ink-blue and highlights carry paper
   // warmth — the two-ink separation a printed cel has and a lit render does not.
-  c = mix(c, c * PAPER, smoothstep(0.55, 1.0, g) * 0.16);
-  c = mix(c, c * (INK * 2.0 + 0.55), (1.0 - smoothstep(0.0, 0.32, g)) * 0.5);
+  //
+  // Both tints are normalised to unit luminance so they shift hue WITHOUT
+  // changing value. The shadow tint used to be a straight multiply by
+  // INK * 2 + 0.55, whose own luminance is 0.69, so every shadow in the game
+  // was quietly being darkened by a further 15% by a term whose stated job was
+  // to tint it.
+  vec3 paperTint = PAPER / max(dot(PAPER, LUMA), 1e-4);
+  vec3 inkTint = (INK * 2.0 + 0.55);
+  inkTint /= max(dot(inkTint, LUMA), 1e-4);
+  c = mix(c, c * paperTint, smoothstep(0.55, 1.0, g) * 0.16);
+  c = mix(c, c * inkTint, (1.0 - smoothstep(0.0, 0.32, g)) * 0.5);
 
-  c = mix(vec3(g), c, uSaturation);
-  // Contrast pivoted at 0.42 rather than 0.5. Pivoting at mid-grey crushes the
-  // shadow bands of the ramp into each other, and the shadow bands are the
-  // whole reason the ramp has four steps instead of two.
-  c = (c - 0.42) * uContrast + 0.42;
+  // --- saturation, bounded so it cannot clip a channel to zero -------------
+  //
+  // mix(vec3(g), c, sat) with sat > 1 pushes every channel away from the
+  // luminance, so the darkest channel of a saturated colour goes NEGATIVE and
+  // the clamp at the end of this shader turns it into a hard zero. That is
+  // what was happening: the shade band of the red hull came back as (44,0,0),
+  // (0,11,0) or (0,0,22) depending only on which channel happened to cross
+  // first, so the same paint had a different shadow hue in every frame and the
+  // outline had nothing to separate itself from.
+  //
+  // The largest boost this pixel can take is the one that lands its darkest
+  // channel exactly on zero; take the smaller of that and the requested one.
+  float minC = min(min(c.r, c.g), c.b);
+  float headroom = g > minC ? g / (g - minC) : 1e9;
+  c = mix(vec3(g), c, min(uSaturation, headroom));
+
+  // --- contrast, applied to value only -------------------------------------
+  //
+  // Pivoted at 0.42 rather than 0.5, because pivoting at mid-grey crushes the
+  // ramp's shadow bands into each other and those bands are the whole reason
+  // it has four steps. Applied as a scale on luminance with the chroma carried
+  // along, rather than as a per-channel offset: an offset subtracts the same
+  // absolute amount from all three channels, which for any dark saturated
+  // colour drives the two small channels below zero and desaturates it towards
+  // a single primary on the way. A scale cannot change a channel's sign and
+  // leaves hue and saturation exactly where the ramp put them.
+  // The floor is proportional to the input rather than absolute. A pivot at
+  // 0.42 subtracts a fixed 0.084 of luminance, which is nothing to a lit band
+  // and is most of a shadow band: measured on the crimson hull it scaled the
+  // shade band by 0.24, so the ramp's two dark steps arrived on screen almost
+  // on top of each other. Holding shadows at no less than 62% of their own
+  // value keeps the steps apart and still lets the contrast do its work in the
+  // mid-tones, where band separation is what the grade was raised for.
+  float lum = dot(c, LUMA);
+  float graded = max((lum - 0.42) * uContrast + 0.42, lum * 0.62);
+  c *= graded / max(lum, 1e-4);
 
   // Paper-tinted vignette: darkens towards ink at the corners rather than
   // towards black, which keeps the frame feeling printed. Kept weak — the first
