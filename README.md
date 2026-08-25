@@ -205,6 +205,38 @@ Each probe runs the real code — real physics against the real wave field, the
 real AI against the real director — and prints measured numbers against stated
 targets. They take a few seconds and need no GPU.
 
+## Where this actually stands
+
+Measured, not asserted.
+
+**Handling** hits every target it was designed against: 33.3 m/s top speed, 95%
+of it in 5.5 s, a 180° turn in 4.5 s dropping to 2.9 s if you drift it, a 1.35 s
+boost worth about +7 m/s, and roughly 1.2 s of hang time off a crest. Run
+`npm run probe:handling` to check.
+
+**A full race** finishes 4/4 with a 3.7–5.0 s spread across three laps and a
+1–2 s winning margin, no wrong-way events and under 1% time off course. Two
+runs of `npm run probe:race` are byte-identical.
+
+**The look** is the weaker half. The cel pipeline and the water each self-assess
+at around 80% and that is fair. Specifically:
+
+- Near-field water reads flatter than the mid distance — the deep tone drops
+  out at grazing angles, so the frame loses contrast exactly where the player
+  is looking.
+- There is a 2–3 px screen-space line artefact where a hull meets the water,
+  from the interior-line pass's relative-depth rejection leaking.
+- Crest silhouettes against the sky pick up a faint grey fringe, because
+  multisampling resolves saturated cyan against the horizon band through grey.
+- The specular still has one glossy highlight that a Guilty Gear frame would
+  not have.
+
+**Not verified at all.** Nobody has heard the audio; it was developed on a
+machine with no audio device, so every gain, filter Q and send level is a
+considered guess. Nothing has been judged in motion either — every frame in
+`shots/` is a paused capture, and temporal stability of the edge pass and the
+band edges under camera movement is where NPR most often falls apart.
+
 ## Licence
 
 MIT.
