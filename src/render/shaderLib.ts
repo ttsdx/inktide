@@ -185,6 +185,17 @@ vec3 celShade(CelInput s) {
   float broad = pow(max(dot(N, H), 0.0), mix(52.0, 8.0, uSpecSize));
   float shapeA = bandStep(0.40, broad, uShadeSoftness);
 
+  // ...and then CLIPPED BY THE TOP RAMP BAND. A thresholded Blinn lobe on a
+  // sphere is a circle, and a hard-edged circle of pale paint is a photograph of
+  // a snooker ball — the captured calibration sphere read as glossy plastic even
+  // after the edge was made hard, because the *contour* was still a lens flare's
+  // contour and not a drawn one. Intersecting the lobe with the lit band cuts it
+  // along the terminator, so the highlight inherits the form's own silhouette:
+  // a lens on a sphere, a wedge on a cone, a facet-aligned slab on a hard-edged
+  // hull. That is the difference between a highlight that is lit and one that is
+  // drawn, and it costs one step(). rampL is the band index, computed above.
+  shapeA *= step(0.62, rampL);
+
   // The satellite. Its half-vector is built from the key rotated about world up
   // and tipped down, so the second shape lands BESIDE the first. Two concentric
   // discs are still just one dot however hard their edges are; the offset pair
@@ -193,25 +204,37 @@ vec3 celShade(CelInput s) {
   float tight = pow(max(dot(N, normalize(Lsat + V)), 0.0), mix(360.0, 70.0, uSpecSize));
   float shapeB = bandStep(0.45, tight, uShadeSoftness * 0.7);
 
-  // Highlights must not appear on the shadow side, and must not wash to white:
-  // pulling the paint colour into the highlight tint keeps a red hull's
-  // highlight a hot pink instead of a grey blob, which is the whole point of
-  // grading for print rather than for film.
+  // The broad shape is THE PAINT DRIVEN UP THE RAMP, not a light added over it.
+  // Adding a sun-tinted light to the racing red — whose red channel is already
+  // at 1.0 — can only move green and blue, and every capture came back with a
+  // pale salmon disc on a crimson ball: the highlight had less chroma than the
+  // surface it sat on, which is the single loudest "physically based" tell in
+  // the frame. Scaling the paint instead keeps the hue exactly and lets the
+  // tonemap decide how bright it lands, so a red hull gets a red-hot highlight.
+  vec3 hiPaint = s.baseColor * 2.4 + 0.08;
+
+  // Only the small satellite carries any neutral. One tiny near-white mark is
+  // how an animator says "lacquered" without spending the surface's chroma.
   float specGate = smoothstep(-0.02, 0.16, ndl) * s.shadow;
-  vec3 specTint = SUN_COLOR * mix(vec3(1.0), 0.42 + 0.58 * s.baseColor, 0.62);
-  vec3 specular = specTint * (shapeA * 0.42 + shapeB * 0.78) * uSpecStrength * specGate;
+  vec3 specular = (hiPaint * shapeA * 0.55
+                + (hiPaint * 0.55 + SUN_COLOR * 0.85) * shapeB * 0.7)
+                * uSpecStrength * specGate;
 
   // --- 3. matcap fake reflection ----------------------------------------
   // View-space normal -> matcap UV. No probe, no cubemap: a painted disc.
   vec3 vn = normalize((viewMatrix * vec4(N, 0.0)).xyz);
   vec2 muv = vn.xy * 0.48 + 0.5;
-  vec3 matcap = texture(uMatcap, muv).rgb;
-  // Quantise the matcap too, otherwise it smuggles smooth shading back in.
-  matcap = floor(matcap * 4.0 + 0.5) / 4.0;
   // The matcap is consumed as a pure VALUE field. Its remaining chroma is a hue
   // the surface never asked for; on a light paint it is the only thing visible,
   // which is what put brown and navy on the near-white calibration icosahedron.
-  float env = luma(matcap);
+  float env = luma(texture(uMatcap, muv).rgb);
+  // Quantise the SCALAR, after luma — not the three channels before it. Banding
+  // RGB gives each channel its own step position, and the luma of that is a
+  // hundred-step staircase over a smooth gradient, which is indistinguishable
+  // from no banding at all. This was the actual source of the soft gradient that
+  // survived on the upper half of the calibration sphere and down the cone's lit
+  // face through four rounds of "the matcap is quantised" being true on paper.
+  env = floor(env * 3.0 + 0.5) / 3.0;
   float envSigned = env - ${f(CEL_MATCAP_NEUTRAL)};
 
   // Applied as a *multiplier* on the shaded paint, not screened or added over

@@ -138,7 +138,12 @@ export class Game {
     this.spray.setImpactSink((x, z, radius, strength) => this.wake?.splash(x, z, radius, strength));
 
     this.course = new Course();
-    this.racingLine = new RacingLine(this.course);
+    // Narrower than the module's default 1.8 m half-width. At the default, and
+    // with the additive halo spilling 2.6x wider still, the line covered most
+    // of the lower half of the frame from the chase camera — a navigation aid
+    // reading as a green carpet laid over the water rather than a marker on it.
+    this.racingLine = new RacingLine(this.course, { halfWidth: 1.05 });
+    this.racingLine.glowMaterial.uniforms.uWidthScale.value = 1.9;
     this.racingLine.mesh.traverse((o) => o.layers.set(LAYER_OVERLAY));
     this.raceRoot.add(this.racingLine.mesh);
 

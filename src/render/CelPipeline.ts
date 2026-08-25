@@ -202,7 +202,7 @@ export class CelPipeline {
       // every silhouette grows a halo. A lit paint plus its banded highlight
       // reaches about 1.7, and blooming that softened the one edge the highlight
       // exists to have; foam and gate glow run well past 2.
-      { tColor: { value: null }, uThreshold: { value: 1.9 }, uKnee: { value: 0.35 } },
+      { tColor: { value: null }, uThreshold: { value: 1.55 }, uKnee: { value: 0.35 } },
       'BrightExtract',
     );
 
@@ -219,9 +219,13 @@ export class CelPipeline {
         tBloom: { value: null },
         uBloomStrength: { value: BLOOM_STRENGTH },
         uVignette: { value: 0.18 },
-        uSaturation: { value: 1.22 },
-        uContrast: { value: 1.12 },
-        uExposure: { value: 1.0 },
+        // 1.22 measured out at *fully clipped* chroma on the calibration
+        // sphere: the green channel of every band below the highlight landed on
+        // zero, so four ramp bands rendered as two. A saturation boost only
+        // helps a desaturated render, and this palette is not one.
+        uSaturation: { value: 1.1 },
+        uContrast: { value: 1.16 },
+        uExposure: { value: 1.08 },
         uTexel: { value: new Vector2() },
         uTime: { value: 0 },
         uFlash: { value: 0 },
@@ -369,6 +373,13 @@ export class CelPipeline {
       this.brightPass.uniforms.tColor.value = colorTex;
       this.brightPass.render(r, this.bright);
 
+      // ONE separable pass, not two. The second, wider pair spread the glow far
+      // enough that a highlight on the calibration sphere lifted the whole
+      // upper half of the sphere: on a pure red paint that added light has
+      // nowhere to go but the green and blue channels, and the measured chroma
+      // across every band above the terminator collapsed to a pastel. A single
+      // 9-tap at half resolution is a ~6 px glow — graphic, local to the thing
+      // that is actually bright, and no help to anything that is not.
       const bTexel = new Vector2(1 / this.bright.width, 1 / this.bright.height);
       const bu = this.blurPass.uniforms;
       bu.tColor.value = this.bright.texture;
@@ -378,14 +389,6 @@ export class CelPipeline {
 
       bu.tColor.value = this.blurA.texture;
       (bu.uDir.value as Vector2).set(0, 1);
-      this.blurPass.render(r, this.blurB);
-
-      bu.tColor.value = this.blurB.texture;
-      (bu.uDir.value as Vector2).set(1.7, 0);
-      this.blurPass.render(r, this.blurA);
-
-      bu.tColor.value = this.blurA.texture;
-      (bu.uDir.value as Vector2).set(0, 1.7);
       this.blurPass.render(r, this.blurB);
 
       bloomTex = this.blurB.texture;

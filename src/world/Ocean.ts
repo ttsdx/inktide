@@ -646,7 +646,7 @@ vec3 detailWave(vec2 p, float t, float px) {
  * *signal* before thresholding, and a noise with a non-zero mean would drag
  * every threshold in this file off its tuned value.
  */
-float foamNoise(vec2 p, float t) {
+float foamNoise(vec2 p, float t, float px) {
   // Squash the sampling frame along the primary swell's direction of travel.
   // Foam is torn off a crest and dragged down the face, so its grain runs
   // *along* the crest line, not isotropically: an unsquashed noise gives round
@@ -668,7 +668,21 @@ float foamNoise(vec2 p, float t) {
   // because that is foam being dragged down the face of a wave, but the tear at
   // the boundary of a foam patch has no direction at all.
   float fine = noiseA(p * 0.42 + vec2(-t * 0.046, t * 0.038));
-  return (big * 0.46 + mid * 0.34 + fine * 0.20) - 0.5;
+
+  // Band-limit the tear octave, the same way each ripple octave rejects itself.
+  //
+  // Its features are about 2.4 m across, so once a pixel covers more water than
+  // that there is less than one sample per feature and what it contributes is
+  // not detail but aliasing. It arrived as a fine crawling stipple across the
+  // whole mid-ground that read as pencil hatching scribbled over the foam —
+  // worse than the corduroy it replaced, because it moves.
+  //
+  // The two surviving octaves are re-weighted rather than simply summed, so the
+  // mean stays at 0.5 and the range does not shrink as the fine octave leaves.
+  // Every foam threshold in this file is tuned against that mean, and letting
+  // it drift would quietly re-tune all of them by distance.
+  float fw = 0.20 * (1.0 - smoothstep(0.6, 1.8, px));
+  return (big * 0.46 + mid * 0.34 + fine * fw) / (0.80 + fw) - 0.5;
 }
 
 /**
@@ -761,7 +775,7 @@ void main() {
   // Handing it the pessimistic curve threw away structure that would have
   // rendered perfectly well: water twenty metres from a chase camera, the
   // busiest and most-looked-at part of the frame, came back as plain blue.
-  float detail = min(vDetail, 1.0 - smoothstep(1.1, 4.5, px));
+  float detail = min(vDetail, 1.0 - smoothstep(0.6, 3.0, px));
 
   float detailAmt = uDetailStrength * detail;
   vec3 dw = detailWave(p, uTime, px) * detailAmt;
@@ -896,7 +910,7 @@ void main() {
   // adding means foam needs a genuine fold AND a genuine crest, which is also
   // the physical condition for a wave to actually break.
   // -----------------------------------------------------------------------
-  float fn = foamNoise(p, uTime);
+  float fn = foamNoise(p, uTime, px);
   // Foam gets its own, stricter swell gate than the contour above.
   //
   // Sharing one gate looked economical and was wrong. The contour wants to
@@ -1019,7 +1033,13 @@ void main() {
   // whole silhouette. Never two, because two tones of white on blue is a
   // sticker; the contour is what makes it look drawn.
   // -----------------------------------------------------------------------
-  float foamSignal = max(max(crestSignal * 1.55, wake * 1.35), max(contact, depthFoam));
+  // The wake's gain is deliberately the lowest of the four. Its field already
+  // saturates at 1.0, so any gain above about 1.1 pushes the whole ribbon —
+  // shoulders included — so far past the tear threshold that the noise cannot
+  // reach it, and the wake comes back as a smooth-edged white blob sitting on
+  // water whose own foam is properly torn. Two different edge treatments in one
+  // frame is worse than either, and it is the wake that looks pasted on.
+  float foamSignal = max(max(crestSignal * 1.55, wake * 1.10), max(contact, depthFoam));
   // Distant foam loses its detail rather than boiling into noise.
   foamSignal *= mix(0.55, 1.0, detail);
 
@@ -1045,6 +1065,19 @@ void main() {
   // saturated blue, and neither of them flattens towards the average of the
   // two, which is the only colour on that line nobody wants.
   vec3 flatTone = mix(mix(uMid, uShallow, 0.55), uFoamShade, clamp(foamSignal * 1.3, 0.0, 1.0));
+  // The pre-filter target has to carry the fresnel lift too, or it undoes it.
+  //
+  // The most grazing pixels in the frame are exactly the ones the pre-filter
+  // takes furthest towards flatTone, and they are also the ones the lift has
+  // most to say about — water seen edge-on is mostly sky. Flattening them to a
+  // mid blue threw that away and left the top edge of every near crest dark,
+  // which matters because that edge is a silhouette against the sky's warm sand
+  // band: multisampling resolves dark navy against sand to a grey-olive, and
+  // the crest close-up came back with a dirty fringe along its ridge. Carrying
+  // the lift into the target makes those pixels pale cyan instead, and pale
+  // cyan against sand resolves to a pale warm cyan, which is a colour the frame
+  // is allowed to contain.
+  flatTone = mix(flatTone, liftCol, lift * 0.5);
   col = mix(flatTone, col, mix(0.28, 1.0, resolve));
 
   // -----------------------------------------------------------------------
@@ -1070,7 +1103,29 @@ void main() {
   float pathRaw = specRaw * 5.0;
   float pathA = fixedStep(0.30, pathRaw, 0.05);
   float pathB = fixedStep(0.78, pathRaw, 0.04);
-  float pathFade = detail * (1.0 - foamEdge);
+
+  // Cut the path into separate strokes across its own axis.
+  //
+  // A sun glitter path is not a continuous bright region; it is a few hundred
+  // individual crests each catching the sun, and drawn media exaggerate that
+  // into a visible ladder of separate horizontal strokes. Left continuous, the
+  // specular lobe covered most of the lower frame in the into-sun capture as
+  // one dirty white smear — and a large near-white area over blue is precisely
+  // where the pre-filter is no help, because there is nothing sub-pixel about
+  // it and it is genuinely that colour.
+  //
+  // The sampling frame is squashed ACROSS the sun's azimuth, so the noise is
+  // short along the path and long across it. That is the right way round: the
+  // strokes have to stack up the path towards the sun, like rungs.
+  vec2 sdir = normalize(vec2(SUN_DIR.x, SUN_DIR.z));
+  vec2 sperp = vec2(sdir.y, -sdir.x);
+  vec2 gp = vec2(dot(p, sdir) * 1.9, dot(p, sperp) * 0.34);
+  float dashN = noiseG(gp * 0.36 + vec2(uTime * 0.06, -uTime * 0.021));
+  // Never all the way to zero: the gaps are duller water, not holes punched in
+  // the reflection, and a fully cut path reads as a stencil laid over the sea.
+  float dash = mix(0.30, 1.0, fixedStep(0.47, dashN, 0.02));
+
+  float pathFade = detail * (1.0 - foamEdge) * dash;
   col = mix(col, uCrest, pathA * 0.42 * pathFade);
   col = mix(col, mix(uFoam, uSunTint, 0.35), pathB * 0.7 * pathFade);
 

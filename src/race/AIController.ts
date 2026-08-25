@@ -133,6 +133,18 @@ export interface AIPersonality {
   /** Longitudinal deceleration it plans braking around, m/s^2. */
   brakeDecel: number;
   /**
+   * Lateral jerk the AI believes it can produce, m/s^3.
+   *
+   * This is what stops it treating a chicane as two independent corners. The
+   * lateral acceleration needed to follow a path is `v^2 * kappa`, so *changing*
+   * direction costs `v^3 * dkappa/ds` — and in an S-bend kappa does not merely
+   * grow, it reverses, so the change is twice as large over the same distance.
+   * Sizing speed on curvature alone let the clean preset arrive at the Chicane
+   * Flick at 31 m/s, which the radius allows and the reversal does not: the hull
+   * could not swap lock fast enough, slid 27 m wide, and missed the gate.
+   */
+  lateralJerkBudget: number;
+  /**
    * Scale on the required braking distance. Below 1 is late braking — it will
    * overshoot corners and have to correct, which is what makes it exciting.
    */
@@ -345,6 +357,23 @@ const HORIZON_SAMPLES = 14;
 const RECOVER_LOOKAHEAD_GAIN = 1.6;
 /** Shortest the recovery horizon may become, metres. Below this it chases noise. */
 const RECOVER_LOOKAHEAD_MIN = 8;
+
+/**
+ * Steering authority the controller assumes while the hull is out of the water.
+ *
+ * The physics gives an airborne hull 16% of its yaw authority, so a steering
+ * command issued in mid-air accomplishes almost nothing — but it is still in the
+ * smoothing filter when the boat lands, at which point it gets full authority
+ * and bites instantly. On the Windward Run, which crosses the swell and is
+ * deliberately the airtime section, that produced a genuine failure: the
+ * erratic racer would wind on full lock over a crest, land, snap sideways, and
+ * end up far enough off line to miss the next gate entirely and lose the lap.
+ *
+ * Damping the command in the air fixes it at the source. It is also what a rider
+ * does: you cannot steer water that is not there, so you set up for the landing
+ * instead.
+ */
+const AIR_STEER_SCALE = 0.3;
 /**
  * Heading error, radians, beyond which the boat counts as genuinely turned
  * around rather than merely off line. Past this the controller stops trying to
@@ -385,6 +414,31 @@ const HULL_WIDTH_ALLOWANCE = 4.0;
 const HULL_GAP_TARGET = 7.0;
 /** Time-to-contact at which the lift reaches full. */
 const FOLLOW_LIFT_SECONDS = 1.5;
+
+/**
+ * Curvature above which the course counts as "a corner" for the purpose of
+ * deciding which mistakes are possible. 0.0025 1/m is a 400 m radius — beyond
+ * the Grand Sweeper's 271 m, so every real corner qualifies and the straights
+ * do not.
+ */
+const CORNER_K = 0.0025;
+/**
+ * Fraction of a corner's limit speed below which mistakes are essentially only
+ * the baseline rate. At 0.82 an AI driving well within itself is nearly
+ * error-free and one arriving 20% too fast is not.
+ */
+const LIMIT_PRESSURE_FLOOR = 0.82;
+/**
+ * Share of the mistake rate that applies regardless of how hard the AI is
+ * trying. Keeps a perfectly judged lap from being perfectly safe.
+ */
+const MISTAKE_BASELINE = 0.18;
+/**
+ * How far off line a `wideEntry` mistake pushes the aim point, in corridor
+ * fractions. Small enough that the boat stays on the course while looking like
+ * it has run wide and lost time.
+ */
+const WIDE_ENTRY_FRACTION = 0.5;
 
 /** Rubber band authority. +-8% of pace, per the brief. */
 const RUBBER_BAND_RANGE = 0.08;
@@ -550,13 +604,13 @@ export class AIController {
     const wanderPace = P.wanderAmount > 0.2 ? Math.sin(this.pacePhase + this.pacePhase) * 0.05 : 0;
     const pace = 1 + band + wanderPace;
 
-    // -----------------------------------------------------------------------
-    // 2. MISTAKES
-    // -----------------------------------------------------------------------
-    this.tickMistakes(dt, speed, topSpeed);
+    // Cornering budget for this hull at this pace. Needed before the mistake
+    // roll, because how close the AI is to this number is what decides whether
+    // it makes one.
+    const latBudget = P.lateralBudget * pace * this.corneringFactor;
 
     // -----------------------------------------------------------------------
-    // 3. LINE — where on the corridor to aim
+    // 2. LINE — where on the corridor to aim
     // -----------------------------------------------------------------------
     // Sample under the hull first: how far off line the boat is decides how far
     // ahead it is allowed to look.
@@ -590,6 +644,23 @@ export class AIController {
     // of what is under the hull.
     const kEntry = this.course.peakCurvatureAhead(aheadT, Math.max(40, lookahead));
 
+    // -----------------------------------------------------------------------
+    // 3. MISTAKES — rolled here, where the corner situation is known
+    // -----------------------------------------------------------------------
+    // The speed this corner will actually hold, and how much more than that the
+    // boat is carrying. Above 1 the AI is asking the hull for grip it does not
+    // have, which is where a driver's errors genuinely come from.
+    const entryK = Math.max(Math.abs(kEntry), Math.abs(kAhead));
+    const cornerLimit = entryK > 1e-5 ? Math.sqrt(latBudget / entryK) : topSpeed * 2;
+    const limitRatio = speed / Math.max(cornerLimit, 1);
+    this.tickMistakes(dt, speed, topSpeed, {
+      limitRatio,
+      approachingCorner: entryK > CORNER_K,
+      inCorner: Math.abs(kAhead) > CORNER_K,
+      drifting: state.driftAmount > 0.25,
+      offLine: excess,
+    });
+
     let offsetFraction = P.lineOffset;
 
     // Apex: the inside of the corner is the side the track curves towards, i.e.
@@ -613,7 +684,15 @@ export class AIController {
     this.wanderPhase += dt * P.wanderHz * Math.PI * 2;
     offsetFraction += Math.sin(this.wanderPhase) * P.wanderAmount;
 
-    if (this.mistake === 'wideEntry') offsetFraction += this.mistakeSign * 1.15;
+    // Running wide means missing the apex, not leaving the course. The magnitude
+    // here used to be 1.15 corridor-fractions, which on the 15.5 m Windward Run
+    // commanded an 18 m lateral target: the boat built up so much sideways
+    // momentum chasing it that when the mistake expired it coasted 31 m off
+    // line, straight past a 22.5 m gate, and lost the whole lap. A mistake
+    // should cost time, not void the lap.
+    if (this.mistake === 'wideEntry') {
+      offsetFraction += this.mistakeSign * WIDE_ENTRY_FRACTION;
+    }
 
     // Off line, none of the above is worth anything: an apex bias computed for a
     // corner the boat is not on the approach to just holds it out wider. Fade
@@ -627,8 +706,10 @@ export class AIController {
     offsetFraction += avoid.offsetFraction;
 
     // Convert to metres and rate limit. An instantaneous jump in the target
-    // offset shows up as a steering spike; 22 m/s of lateral target movement is
-    // faster than any hull can follow but slow enough to filter the jump.
+    // offset shows up as a steering spike, and a target that moves much faster
+    // than the hull can follow lets the boat build lateral momentum it then
+    // overshoots with. 9 m/s crosses a full corridor in under two seconds,
+    // which is as fast as any line change needs to be.
     const halfWidth = this.aheadPoint.width;
     // Leave a hull's width of margin so an apex-clipping AI does not park itself
     // on the buoy line every corner.
@@ -650,7 +731,7 @@ export class AIController {
       wantOffset += (clamp(this.launchLane, -maxOffset, maxOffset) - wantOffset) * hold;
     }
 
-    const slew = 22 * dt;
+    const slew = 9 * dt;
     this.lateralTarget += clamp(wantOffset - this.lateralTarget, -slew, slew);
 
     _aim
@@ -672,8 +753,15 @@ export class AIController {
     // One-pole low pass on the error rate. Without it the D term amplifies the
     // heading jitter the waves put into the hull and the boat twitches on every
     // crest.
-    const alpha = 1 - Math.exp(-2 * Math.PI * P.steerFilterHz * dt);
-    this.filteredErrorRate += (rawRate - this.filteredErrorRate) * alpha;
+    //
+    // Frozen while airborne: a boat on a ballistic arc accumulates heading error
+    // that no steering input can affect, and feeding that into the derivative
+    // term produces a large, entirely spurious correction that only lands when
+    // the hull does.
+    if (!state.airborne) {
+      const alpha = 1 - Math.exp(-2 * Math.PI * P.steerFilterHz * dt);
+      this.filteredErrorRate += (rawRate - this.filteredErrorRate) * alpha;
+    }
 
     const recovering = this.recoveryTimer > 0;
     // Recovery uses a stiffer proportional term and more damping: the boat is
@@ -705,6 +793,9 @@ export class AIController {
       steer *= clamp(0.34 - P.aggression * 0.22, 0.05, 0.34);
     }
 
+    // Do not wind on lock the hull cannot use. See AIR_STEER_SCALE.
+    if (state.airborne) steer *= AIR_STEER_SCALE;
+
     steer = clamp(steer, -1, 1);
     // Final smoothing so the steering trace looks like a hand on a stick.
     const steerLag = Math.min(1, 26 * dt);
@@ -713,7 +804,6 @@ export class AIController {
     // -----------------------------------------------------------------------
     // 6. SPEED
     // -----------------------------------------------------------------------
-    const latBudget = P.lateralBudget * pace * this.corneringFactor;
     const decel = P.brakeDecel;
     const horizon = Math.max(HORIZON_MIN, speed * HORIZON_SECONDS);
     const floor = topSpeed * P.minCornerFraction;
@@ -809,6 +899,38 @@ export class AIController {
     c.brake = clamp(brake, 0, 1);
     c.steer = clamp(this.steerSmoothed, -1, 1);
     c.drift = drift;
+
+    // TEMP-DEBUG
+    const dbg = (globalThis as Record<string, unknown>).__AI_DEBUG as
+      | ((s: Record<string, number | string | boolean>) => void)
+      | undefined;
+    if (dbg) {
+      dbg({
+        id: this.boatId,
+        t,
+        lat: lateralNow,
+        excess,
+        spun,
+        recovering: this.recovering,
+        lookahead,
+        offsetFraction,
+        wantOffset,
+        lateralTarget: this.lateralTarget,
+        headingError,
+        steer: c.steer,
+        rawSteer: steer,
+        throttle: c.throttle,
+        brake: c.brake,
+        drift: c.drift,
+        air: state.airborne,
+        speed,
+        mistake: this.mistake,
+        lift: avoid.lift,
+        blockSide: avoid.blockSide,
+        avoidOffset: avoid.offsetFraction,
+        width: this.aheadPoint.width,
+      });
+    }
     return c;
   }
 
@@ -819,16 +941,46 @@ export class AIController {
   /**
    * Roll for, run and retire mistakes.
    *
+   * WHY THIS IS NOT A FLAT COIN FLIP
+   *
+   * The first version of this rolled a fixed per-second probability and then
+   * picked a mistake kind at random. It produced errors at the right *rate* and
+   * in entirely the wrong *places*: an AI was exactly as likely to botch a drift
+   * halfway down a straight as at the entry to the hairpin, and a "wide entry"
+   * could fire 300 m from the nearest corner, where there is no entry to be wide
+   * into. Watching it, the mistakes read as the AI glitching rather than as a
+   * driver overcooking it, which is the opposite of the point — beating an
+   * opponent only feels earned if you can see why they lost it.
+   *
+   * So the hazard rate is now modulated by how hard the AI is actually trying:
+   * `limitRatio` is the speed it is carrying divided by the speed the corner
+   * ahead will hold, and above `LIMIT_PRESSURE_FLOOR` the chance of an error
+   * climbs steeply. Being off line at turn-in adds to it, for the same reason it
+   * does in a real car — the grip you have left is a function of what you are
+   * already asking for.
+   *
+   * The *kind* is then chosen from what is physically plausible right now, so a
+   * botched drift only happens while drifting and a missed brake point only
+   * happens when there is a brake point to miss. On a straight the only thing
+   * left that makes sense is bogging the engine, which is why it is the fallback.
+   *
    * The probability is expressed per *second* and converted with
    * `1 - exp(-rate * dt)` rather than `rate * dt`, so the mistake frequency is
    * genuinely frame-rate independent — the naive form makes the AI 2.4x more
    * error-prone at 144 fps than at 60.
-   *
-   * Mistakes are suppressed below a third of top speed so an AI cannot fluff a
-   * corner it is already crawling through, which reads as a bug rather than as
-   * a driver error.
    */
-  private tickMistakes(dt: number, speed: number, topSpeed: number): void {
+  private tickMistakes(
+    dt: number,
+    speed: number,
+    topSpeed: number,
+    ctx: {
+      limitRatio: number;
+      approachingCorner: boolean;
+      inCorner: boolean;
+      drifting: boolean;
+      offLine: number;
+    },
+  ): void {
     const P = this.personality;
 
     if (this.mistakeTimer > 0) {
@@ -845,14 +997,40 @@ export class AIController {
       return;
     }
 
+    // Suppressed below a third of top speed so an AI cannot fluff a corner it is
+    // already crawling through, which reads as a bug rather than a driver error.
     if (speed < topSpeed * 0.34) return;
+    // And never while already off the course: piling a mistake on top of a
+    // recovery is how a small error turns into a lost lap.
+    if (ctx.offLine > 0.1) return;
 
-    const chance = 1 - Math.exp(-P.mistakeRate * dt);
+    // Pressure: 0 while comfortably within the corner's limit, 1 when asking for
+    // appreciably more grip than there is. Off-line at turn-in counts too.
+    const overLimit = clamp(
+      (ctx.limitRatio - LIMIT_PRESSURE_FLOOR) / (1 - LIMIT_PRESSURE_FLOOR),
+      0,
+      1,
+    );
+    const pressure = clamp(overLimit + ctx.offLine * 0.5, 0, 1);
+
+    // A baseline keeps some unpredictability on a perfectly judged lap; the rest
+    // is earned by pushing. `mistakeRate` is the rate at full pressure.
+    const rate = P.mistakeRate * (MISTAKE_BASELINE + (1 - MISTAKE_BASELINE) * pressure * pressure);
+    const chance = 1 - Math.exp(-rate * dt);
     if (this.rng() >= chance) return;
 
+    // Pick from what is actually possible in this situation.
     const roll = this.rng();
-    this.mistake =
-      roll < 0.34 ? 'lateBrake' : roll < 0.66 ? 'wideEntry' : roll < 0.88 ? 'botchedDrift' : 'bogged';
+    if (ctx.drifting && ctx.inCorner) {
+      this.mistake = roll < 0.62 ? 'botchedDrift' : 'wideEntry';
+    } else if (ctx.approachingCorner && !ctx.inCorner) {
+      this.mistake = roll < 0.55 ? 'lateBrake' : 'wideEntry';
+    } else if (ctx.inCorner) {
+      this.mistake = roll < 0.5 ? 'wideEntry' : 'botchedDrift';
+    } else {
+      this.mistake = 'bogged';
+    }
+
     this.mistakeSign = this.rng() < 0.5 ? -1 : 1;
     // Duration jittered +-30% so the same mistake does not always last the
     // same time and become learnable.
