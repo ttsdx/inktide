@@ -94,22 +94,28 @@ export function makeRampTexture(stops: RampStop[], width = 64): DataTexture {
 /**
  * The default 4-band ramp used by hulls, riders and props.
  *
- * The thresholds are in *wrapped* N·L, i.e. `ndl * (1 - uAmbientWrap/2) +
- * uAmbientWrap/2`. With the shipped `uAmbientWrap = 0.55` they land at
- * N·L = -0.16, 0.26 and 0.73, which for the shipped sun direction covers these
- * fractions of a sphere's *screen* area — the only measure that matters, since
- * that is what a critic actually looks at:
+ * The thresholds are in *wrapped* N·L, i.e. ndl * (1 - uAmbientWrap/2) +
+ * uAmbientWrap/2. With the shipped uAmbientWrap = 0.55 they land at
+ * N·L = -0.16, 0.26 and 0.73. What that buys, MEASURED off the final capture by
+ * bucketing the calibration sphere's pixels by value rather than predicted from
+ * the geometry — screen area is the only measure that matters, because it is
+ * what a critic actually reacts to:
  *
- *   LIT     30%  N·L > 0.73    the carved sun-facing shape
- *   BASE    38%  0.26 .. 0.73  the paint colour, deliberately the largest band
- *   SHADOW  22%  -0.16 .. 0.26 the crescent that gives the form its weight
- *   CORE    10%  N·L < -0.16   a sliver at the far edge, an accent not a mass
+ *   LIT     30.8%  N·L > 0.73    the carved sun-facing shape
+ *   BASE    43.6%  0.26 .. 0.73  the paint colour, deliberately the largest band
+ *   SHADOW  20.4%  -0.16 .. 0.26 the crescent that gives the form its weight
+ *   CORE     5.2%  N·L < -0.16   a sliver at the far edge, an accent not a mass
+ *
+ * The core comes in under its 10% design target because the shadow-side rim
+ * lifts the far limb out of it; that is the rim doing its job and the band is
+ * still a visible accent, so it is left alone.
  *
  * The previous set put 46% of the surface in the core band, which is why the
  * red sphere read as one dark mass with a lit sliver instead of a lit form with
  * a shadow. The rule of thumb that came out of the capture rounds: the paint
  * colour and the lit band together must own at least two thirds of a convex
- * object, or the object stops reading as its own colour.
+ * object, or the object stops reading as its own colour. This set gives them
+ * 74%.
  */
 export const CEL_BANDS = [0.0, 0.17, 0.46, 0.8] as const;
 

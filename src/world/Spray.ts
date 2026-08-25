@@ -169,7 +169,13 @@ export class Spray implements GameSystem {
     const c = this.attrC.array as Float32Array;
     const col = this.attrColor.array as Float32Array;
 
-    const tint = req.color ?? this.tmpColor.copy(PALETTE.foam);
+    // White, not the foam colour. The shader multiplies this into uFoam, which
+    // is already the foam colour, so defaulting it to foam squared it — and a
+    // pale cyan squared is a middling blue-grey. That is the whole reason the
+    // droplets kept reading as wet gravel rather than water no matter what was
+    // done to the rim and the shading: their base colour was simply wrong.
+    // White is the identity here, and req.color still tints from there.
+    const tint = req.color ?? this.tmpColor.setRGB(1, 1, 1);
 
     for (let n = 0; n < count; n++) {
       const i = this.cursor;
@@ -459,9 +465,9 @@ void main() {
   // every droplet in a burst is lit from the same direction as the sun. It
   // fades out with the ink for the same reason: a two-tone droplet four pixels
   // across is a one-tone droplet with the wrong tone.
-  float shade = smoothstep(edge * 0.52 - aa, edge * 0.52 + aa,
+  float shade = smoothstep(edge * 0.68 - aa, edge * 0.68 + aa,
                            length(vQuad - vec2(-0.30, 0.34)));
-  col = mix(col, uFoamShade, shade * rim * 0.65 * mix(0.35, 1.0, inkVisible));
+  col = mix(col, uFoamShade, shade * rim * 0.5 * mix(0.35, 1.0, inkVisible));
 
   // Opacity steps through three values and holds. A smooth fade is what makes
   // a particle read as a particle; a drawn droplet is either there or it is

@@ -167,7 +167,15 @@ export function attachOutline(mesh: Mesh, opts: OutlineOptions = {}): Mesh {
     color: opts.color ?? PALETTE.ink,
     widthPx: opts.widthPx ?? 2.4,
   });
-  mat.uniforms.uDistanceTaper.value = opts.distanceTaper ?? 0.62;
+  // 0.62 was a hedge against a distant pack of boats smearing into one black
+  // mass, taken before the distance rig existed to check whether that actually
+  // happened. It does not: at 94 m a 1.2 m sphere is 15 px across and its ink is
+  // one pixel, which reads as a drawn contour and not as a smear. What 0.62 did
+  // cost was the thing the outline is for — a boat two positions ahead had a
+  // visibly finer line than the player's, so the two read as different materials
+  // rather than the same object at different distances. 0.9 keeps a token
+  // recession at the horizon and is otherwise constant.
+  mat.uniforms.uDistanceTaper.value = opts.distanceTaper ?? 0.9;
   registry.add(mat);
   applyViewport(mat);
 

@@ -137,6 +137,11 @@ interface RacerInternal {
   /** True once `prevGateDistance` holds a real value. */
   gatePrimed: boolean;
   missedReported: boolean;
+  /**
+   * True if the racer has been grossly outside the corridor since it last
+   * banked a gate. See the anti-cut note in `checkCheckpoint`.
+   */
+  cutSinceGate: boolean;
   wrongWayTimer: number;
   rightWayTimer: number;
   lapStartTime: number;
@@ -163,6 +168,27 @@ const _tangent = new Vector3();
 
 /** Beeps before GO. 3-2-1, then 0 which is GO itself. */
 const COUNTDOWN_BEEPS = 3;
+
+/**
+ * Multiple of the corridor half-width beyond which a racer on the *inside* of a
+ * corner counts as having cut it.
+ *
+ * Sized from measurement: boat-to-boat contact throws a racer a little over two
+ * corridor widths out, while cutting the hairpin chord puts it four and a half.
+ * Three separates them.
+ */
+const CUT_CORRIDOR_MULTIPLE = 3;
+/**
+ * And the same beyond which it counts as having left the course whichever side
+ * it went. Deliberately much further out: see the note on sidedness below.
+ */
+const LEFT_COURSE_MULTIPLE = 5.5;
+/**
+ * Curvature, 1/m, above which the course is curving enough for "inside" and
+ * "outside" to mean anything. 1/500 m; the Grand Sweeper's 271 m radius clears
+ * it comfortably and a straight does not.
+ */
+const CUT_MIN_CURVATURE = 0.002;
 
 export class RaceDirector {
   phase: RacePhase = 'intro';
@@ -266,6 +292,7 @@ export class RaceDirector {
       s.prevGateDistance = 0;
       s.gatePrimed = false;
       s.missedReported = false;
+      s.cutSinceGate = false;
       s.wrongWayTimer = 0;
       s.rightWayTimer = 0;
       s.lapStartTime = 0;
@@ -363,6 +390,38 @@ export class RaceDirector {
       s.continuous += delta;
 
       p.lapProgress = t;
+
+      // Latch a gross departure from the course. Read at the next gate; see the
+      // anti-cut note in `checkCheckpoint`.
+      //
+      // WHICH SIDE MATTERS
+      //
+      // Distance off the corridor alone cannot tell cutting from running wide,
+      // and the two deserve opposite treatment: cutting shortens the lap and
+      // must void the gate, while running wide already costs the racer the time
+      // it took to get back and must not cost it the lap on top. Testing only
+      // the magnitude punished both, and because the chicane corridor is 9 m
+      // half-width, an ordinary understeery moment through there was three
+      // corridor widths out and lost a whole lap — a 172 s lap against an 85 s
+      // one, which is the single worst thing that can happen to a race.
+      //
+      // A cut is a departure towards the *inside* of a corner, which is exactly
+      // where the signed curvature points: positive curvature bends towards the
+      // left normal, and the lateral offset is measured along that same normal,
+      // so the boat is on the inside when the two share a sign. Beyond
+      // LEFT_COURSE_MULTIPLE the boat is so far out that it is not racing the
+      // circuit at all and the side stops mattering.
+      const off = Math.abs(_progress.lateralOffset);
+      const widths = off / Math.max(this.course.widthAt(t), 1);
+      if (widths > LEFT_COURSE_MULTIPLE) {
+        s.cutSinceGate = true;
+      } else if (widths > CUT_CORRIDOR_MULTIPLE) {
+        const k = this.course.signedCurvatureAt(t);
+        const inside =
+          Math.abs(k) > CUT_MIN_CURVATURE && Math.sign(_progress.lateralOffset) === Math.sign(k);
+        if (inside) s.cutSinceGate = true;
+      }
+
       // Clamp to the validated lap count. A boat cannot be reported as more
       // than one lap ahead of the gates it has actually passed, which closes the
       // door on both spline glitches and deliberate cutting.
@@ -415,7 +474,24 @@ export class RaceDirector {
     // Forward crossing only. Reversing back through a gate must not count, or a
     // boat parked on the line could oscillate its way around the circuit.
     const step = state.speed * dt * GATE_STEP_SAFETY + GATE_STEP_FLOOR;
-    if (prev < 0 && along >= 0 && along - prev <= step && Math.abs(across) <= cp.width) {
+    if (prev < 0 && along >= 0 && along - prev <= step && Math.abs(across) <= cp.validationWidth) {
+      // The gate opening is now deliberately forgiving, so that a racer knocked
+      // sideways by contact loses time rather than the whole lap. That
+      // forgiveness must not become a licence to cut, and a momentary check at
+      // the gate cannot tell the difference: a boat that drives straight across
+      // the bay at the hairpin rejoins the course before the next gate and
+      // arrives at it perfectly legally. There is no checkpoint inside The Pin
+      // to catch it either — gates are placed away from high curvature on
+      // purpose, because the plane test is ambiguous at an apex.
+      //
+      // So the test is over the whole segment rather than the instant: a racer
+      // that left the course altogether since the last gate does not get this
+      // one. Cutting any real corner here puts a boat three to five corridor
+      // widths out; contact puts it barely two.
+      if (s.cutSinceGate) {
+        s.cutSinceGate = false;
+        return;
+      }
       this.passGate(p, s);
       return;
     }
@@ -437,6 +513,7 @@ export class RaceDirector {
     p.nextCheckpoint = (passed + 1) % count;
     s.gatePrimed = false;
     s.missedReported = false;
+    s.cutSinceGate = false;
 
     // The split is measured from the start of the lap in progress, so it is
     // directly comparable with the same gate on any other lap.
@@ -700,6 +777,7 @@ function blankInternal(gateCount: number): RacerInternal {
     prevGateDistance: 0,
     gatePrimed: false,
     missedReported: false,
+    cutSinceGate: false,
     wrongWayTimer: 0,
     rightWayTimer: 0,
     lapStartTime: 0,

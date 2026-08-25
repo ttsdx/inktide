@@ -49,6 +49,35 @@ import { sampleOcean } from '../world/gerstner.ts';
  *   near/far row— the same sphere from 6 m to 94 m down a clear lane, to
  *                 confirm the outline is the same number of pixels wide at both.
  */
+/**
+ * The outline-width rig's eye point, elevation and stations (metres, degrees).
+ *
+ * Exported because `tools/probeShots.mjs` needs the identical numbers to place
+ * probe-02's camera, and a rig whose camera has drifted from its geometry
+ * measures nothing.
+ */
+export const ROW_EYE = [-22, 3.0, 26] as const;
+export const ROW_ELEV_DEG = 10;
+/**
+ * [distance from ROW_EYE, bearing in degrees off the eye's -Z axis].
+ *
+ * The bearings are not evenly spaced, because the spheres are not evenly sized
+ * on screen: a 1.2 m sphere at 7 m subtends 19.5 degrees and at 94 m it subtends
+ * 1.5. An even 10-degree fan therefore had the nearest sphere sitting on top of
+ * the second, which hid one of the two outlines being compared — the first
+ * version of this rig produced a clean-looking frame that could not actually be
+ * measured. Each gap is now wider than the mean angular size of the pair it
+ * separates, and the 35-degree total span still fits inside the 42.8-degree half
+ * field of view at 16:9.
+ */
+export const ROW_STATIONS = [
+  [7, 12],
+  [15, -6],
+  [30, -15],
+  [55, -20],
+  [94, -23],
+] as const;
+
 export class ProbeScene {
   readonly root = new Group();
   private bobbers: Array<{ mesh: Mesh; phase: number; base: Vector3 }> = [];
@@ -61,12 +90,16 @@ export class ProbeScene {
       color: import('three').Color,
       pos: [number, number, number],
       opts: Partial<ConstructorParameters<typeof CelMaterial>[0]> = {},
+      still = false,
     ): Mesh => {
       const mesh = new Mesh(geo, new CelMaterial({ color: color.clone(), ...opts }));
       mesh.position.set(...pos);
       mesh.layers.set(LAYER_OPAQUE);
       this.root.add(mesh);
-      this.bobbers.push({ mesh, phase: this.bobbers.length * 1.3, base: mesh.position.clone() });
+      // The measuring rig opts out of the bob: a ruler that moves is not a ruler.
+      if (!still) {
+        this.bobbers.push({ mesh, phase: this.bobbers.length * 1.3, base: mesh.position.clone() });
+      }
       return mesh;
     };
 
@@ -99,15 +132,35 @@ export class ProbeScene {
       { size: [2.0, 0.6, 1.6], at: [0, 1.2, -0.9] },
     ]), PALETTE.suitLit, [14.5, 2.2, 0]);
 
-    // Distance calibration row: identical spheres receding straight down -Z on
-    // a clear lane, so a single frame can be measured end to end. They were
-    // previously fanned sideways and ran behind the cylinder, which made the
-    // near end unmeasurable.
-    for (let i = 0; i < 5; i++) {
-      add(new SphereGeometry(1.2, 32, 24), PALETTE.racingLine, [-22, 2.2, 6 - i * 22], {
-        emissive: PALETTE.racingLine,
-        emissiveStrength: 0.12,
-      });
+    // OUTLINE WIDTH MEASURING RIG.
+    //
+    // Five identical spheres at 7, 15, 30, 55 and 94 m, placed by polar
+    // coordinates about a fixed eye point rather than by eye. Two earlier
+    // layouts — a straight lane down -Z, then a sideways fan — both failed as
+    // measurements for the same reason: the spheres landed at different screen
+    // heights against a mixture of water, foam and the horizon band, so an ink
+    // width read off the frame was as much a measure of what happened to be
+    // behind the sphere as of the outline.
+    //
+    // The fix is to treat this as instrumentation. Each sphere sits at a fixed
+    // ELEVATION ANGLE from the eye, so they all land on the same screen row, and
+    // the row is high enough that every one of them is silhouetted against clear
+    // sky. The bearings fan to the left only, so the rig never crosses the
+    // primitive lineup. probe-02-distance-row's camera is ROW_EYE looking down
+    // the row's centre bearing; the two must be edited together.
+    for (const [dist, bearingDeg] of ROW_STATIONS) {
+      const a = (bearingDeg * Math.PI) / 180;
+      add(
+        new SphereGeometry(1.2, 32, 24),
+        PALETTE.racingLine,
+        [
+          ROW_EYE[0] + dist * Math.sin(a),
+          ROW_EYE[1] + dist * Math.tan((ROW_ELEV_DEG * Math.PI) / 180),
+          ROW_EYE[2] - dist * Math.cos(a),
+        ],
+        { emissive: PALETTE.racingLine, emissiveStrength: 0.12 },
+        true,
+      );
     }
 
     outlineHierarchy(this.root, { widthPx: 2.6 });

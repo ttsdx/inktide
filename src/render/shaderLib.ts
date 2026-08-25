@@ -75,9 +75,36 @@ const vec3 HAZE_COLOR = ${glslVec3(PALETTE.skyMid)};
 const vec3 HORIZON_COLOR = ${glslVec3(PALETTE.skyHorizon)};
 const vec3 INK = ${glslVec3(PALETTE.ink)};
 
-/** Hard quantisation with a *tiny* softening so 4K downsampling does not crawl. */
+/**
+ * Fixed-softness band edge. Prefer bandStepAA below in any fragment shader —
+ * this one exists for vertex shaders and for quantities with no meaningful
+ * screen-space derivative, where fwidth() is either illegal or zero.
+ */
 float bandStep(float edge, float x, float softness) {
   return smoothstep(edge - softness, edge + softness, x);
+}
+
+/**
+ * A band edge that is hard to the eye and exactly one pixel wide on screen.
+ *
+ * A fixed softness cannot do this, because the width of the transition in PIXELS
+ * is the softness divided by however fast the underlying quantity happens to be
+ * changing — and that varies by orders of magnitude across one frame. On a
+ * close-up sphere the wrapped N·L changes so slowly that a fixed 0.016 was
+ * effectively a pure step(), and a step() whose boundary runs near-vertical
+ * produces a staircase with steps as tall as the boundary's inverse slope. The
+ * calibration sphere's terminator came out of round 9 as an 8-px-tall zigzag,
+ * which no amount of MSAA touches: the edge is in the shading, not the geometry.
+ *
+ * Scaling the transition by the screen-space derivative makes it one pixel
+ * everywhere, which is as hard as an edge can be and still not alias. The
+ * uShadeSoftness floor is kept so a surface that is genuinely flat in this
+ * quantity — a face whose whole area sits on one side of the edge — does not
+ * divide by a derivative of zero.
+ */
+float bandStepAA(float edge, float x, float softness) {
+  float w = max(fwidth(x) * 0.6, softness * 0.2);
+  return smoothstep(edge - w, edge + w, x);
 }
 
 /** sRGB-ish luminance, used for keeping band shifts perceptually even. */
@@ -150,7 +177,24 @@ vec3 celShade(CelInput s) {
   wrapped *= s.shadow;
   wrapped *= mix(0.72, 1.0, s.ao);
 
-  vec3 ramp = texture(uRamp, vec2(clamp(wrapped, 0.001, 0.999), 0.5)).rgb * RAMP_SCALE;
+  // THREE TAPS, spread along the screen-space gradient of the wrapped N.L.
+  //
+  // The ramp is a NearestFilter texture on purpose — the bands have to be hard —
+  // but a nearest fetch of a quantity that varies across the screen is an
+  // aliased step, and the band edges came out of round 9 as visible staircases
+  // wherever a terminator ran close to vertical or horizontal. Sampling the ramp
+  // at the pixel's footprint instead of at its centre resolves the edge to about
+  // one pixel with three intermediate levels, which reads as a clean drawn line
+  // and not as a gradient. Supersampling the *lookup* is the only place this can
+  // be fixed: softening the ramp texture itself would soften every band edge by
+  // a fixed amount in N·L, which is a gradient on a close surface and still a
+  // staircase on a distant one.
+  float rampW = clamp(fwidth(wrapped) * 0.5, 0.0, 0.06);
+  vec3 ramp = (
+      texture(uRamp, vec2(clamp(wrapped - rampW, 0.001, 0.999), 0.5)).rgb * 0.25
+    + texture(uRamp, vec2(clamp(wrapped,         0.001, 0.999), 0.5)).rgb * 0.5
+    + texture(uRamp, vec2(clamp(wrapped + rampW, 0.001, 0.999), 0.5)).rgb * 0.25
+  ) * RAMP_SCALE;
 
   // The ramp carries the band *shape* and its colour temperature shift; the
   // surface's own paint colour is multiplied back in so one ramp serves every
@@ -182,7 +226,7 @@ vec3 celShade(CelInput s) {
   float albedoL = luma(s.baseColor);
   float shadowFill = 1.0 - smoothstep(0.10, 0.70, rampL);
   float keyFill = smoothstep(0.78, 1.0, rampL);
-  diffuse += SKY_COLOR * shadowFill * uSkyFill * (0.35 + 1.5 * albedoL)
+  diffuse += SKY_COLOR * shadowFill * uSkyFill * (0.55 + 1.25 * albedoL)
            + SUN_COLOR * keyFill * uKeyFill * (0.45 + 1.1 * albedoL);
 
   // --- 2. banded specular ------------------------------------------------
@@ -194,7 +238,7 @@ vec3 celShade(CelInput s) {
   // before — is a dot, and a dot is what reads as a plastic sphere.
   vec3 H = normalize(L + V);
   float broad = pow(max(dot(N, H), 0.0), mix(52.0, 8.0, uSpecSize));
-  float shapeA = bandStep(0.40, broad, uShadeSoftness);
+  float shapeA = bandStepAA(0.40, broad, uShadeSoftness);
 
   // ...and then CLIPPED BY THE TOP RAMP BAND. A thresholded Blinn lobe on a
   // sphere is a circle, and a hard-edged circle of pale paint is a photograph of
@@ -204,16 +248,20 @@ vec3 celShade(CelInput s) {
   // along the terminator, so the highlight inherits the form's own silhouette:
   // a lens on a sphere, a wedge on a cone, a facet-aligned slab on a hard-edged
   // hull. That is the difference between a highlight that is lit and one that is
-  // drawn, and it costs one step(). rampL is the band index, computed above.
-  shapeA *= step(0.62, rampL);
+  // drawn, and it costs one step. rampL is the band index, computed above.
+  shapeA *= bandStepAA(0.62, rampL, uShadeSoftness);
 
   // The satellite. Its half-vector is built from the key rotated about world up
   // and tipped down, so the second shape lands BESIDE the first. Two concentric
   // discs are still just one dot however hard their edges are; the offset pair
   // is the thing that reads as anime specular.
+  // It has to stay SMALL. Measured across the sphere it was 17 px wide at 25%
+  // saturation, i.e. a second pale blob nearly as large as the main highlight,
+  // which reads as two glossy reflections rather than one drawn mark plus its
+  // accent. The exponent is up and its neutral share is down accordingly.
   vec3 Lsat = normalize(L + cross(L, vec3(0.0, 1.0, 0.0)) * 0.68 - vec3(0.0, 0.30, 0.0));
-  float tight = pow(max(dot(N, normalize(Lsat + V)), 0.0), mix(360.0, 70.0, uSpecSize));
-  float shapeB = bandStep(0.45, tight, uShadeSoftness * 0.7);
+  float tight = pow(max(dot(N, normalize(Lsat + V)), 0.0), mix(620.0, 150.0, uSpecSize));
+  float shapeB = bandStepAA(0.45, tight, uShadeSoftness * 0.7);
 
   // The broad shape is THE PAINT DRIVEN UP THE RAMP, not a light added over it.
   // Adding a sun-tinted light to the racing red — whose red channel is already
@@ -226,9 +274,15 @@ vec3 celShade(CelInput s) {
 
   // Only the small satellite carries any neutral. One tiny near-white mark is
   // how an animator says "lacquered" without spending the surface's chroma.
-  float specGate = smoothstep(-0.02, 0.16, ndl) * s.shadow;
+  // Light paints get less of it. A pale surface has almost no headroom above its
+  // own lit band, so a highlight at full strength lands on white and the object
+  // stops being paint and starts being lacquered sheet metal — the near-white
+  // calibration slabs came back from round 9 looking like polished panels. A
+  // dark paint has the whole range above it to play with and needs the full
+  // amount to register at all.
+  float specGate = smoothstep(-0.02, 0.16, ndl) * s.shadow * mix(1.0, 0.42, albedoL);
   vec3 specular = (hiPaint * shapeA * 0.55
-                + (hiPaint * 0.55 + SUN_COLOR * 0.85) * shapeB * 0.7)
+                + (hiPaint * 0.7 + SUN_COLOR * 0.5) * shapeB * 0.85)
                 * uSpecStrength * specGate;
 
   // --- 3. matcap fake reflection ----------------------------------------
@@ -269,28 +323,51 @@ vec3 celShade(CelInput s) {
   // Two rims, because one term cannot do both jobs.
   float fres = pow(1.0 - ndv, uRimPower);
 
+  // CURVATURE GATE. A fresnel term is constant across a flat face, so on a box
+  // it does not draw an edge — it repaints the whole face. The backlit probe
+  // showed the calibration box's right-hand face rendered as a single flat slab
+  // of cream at a higher value than the face pointing at the camera, which reads
+  // as a lighting bug and nothing else. Rim light belongs on curvature: where
+  // the shading normal turns within the pixel there is a contour, and where it
+  // does not there is a face. A flat face keeps a small fraction rather than
+  // zero, because a faceted object — the calibration icosahedron, and any
+  // low-poly hull panel — does still want its silhouette facets lit.
+  float turn = length(fwidth(N));
+  float curved = mix(0.22, 1.0, smoothstep(0.004, 0.05, turn));
+
   // The key rim traces the sun-side edge in warm light. This is the term that
   // makes a shape feel drawn rather than lit, and it is the one that was
   // missing: the old single rim was gated on N.y, so a shape lit from the side
   // got a rim on its top edge and nothing along the contour facing the sun.
-  float keyRim = bandStep(uRimWidth, fres, uShadeSoftness * 1.4)
+  float keyRim = bandStepAA(uRimWidth, fres, uShadeSoftness * 0.9)
                * smoothstep(-0.30, 0.30, ndl);
 
   // The sky rim traces the shadow-side edge in cool light. Its job is purely
   // separation: without it a dark hull silhouetted against dark water loses its
   // contour the moment the ink line is thinner than a pixel. It is the WIDER of
   // the two — separation is the job that has to survive at distance.
-  float skyRim = bandStep(uRimWidth * 0.78, fres, uShadeSoftness * 2.2)
+  float skyRim = bandStepAA(uRimWidth * 0.82, fres, uShadeSoftness)
                * (1.0 - smoothstep(-0.20, 0.45, ndl))
                * mix(0.40, 1.0, clamp(N.y * 0.5 + 0.5, 0.0, 1.0));
 
   // The key rim is tinted towards the paint for the same reason the specular is:
   // a pure sun-coloured rim at any useful strength renders as a white glow, the
   // bright extract picks it up, and the bloom turns every silhouette into a
-  // halo. Tinted, it reads as ink-adjacent light on a coloured surface.
-  vec3 keyRimTint = SUN_COLOR * (0.45 + 0.85 * s.baseColor);
-  vec3 rimLight = keyRimTint * keyRim * uKeyRimStrength
-                + uRimColor * skyRim * uRimStrength;
+  // halo. The paint's weight here is high on purpose — a scan across the
+  // calibration sphere measured the previous tint at 40% saturation against a
+  // 100%-saturated surface, so the rim was *less* coloured than the paint it was
+  // meant to be lighting and read as an airbrushed glow.
+  vec3 keyRimTint = SUN_COLOR * (0.18 + 1.5 * s.baseColor);
+
+  // The sky rim is tinted the same way, for a reason that is easy to miss: an
+  // untinted cobalt rim on a crimson sphere measured rgb(205,150,165) — a
+  // neutral mauve at 30% saturation sitting on a surface at 100%. It read as a
+  // grey wash, not as light. Multiplying the sky colour through the paint keeps
+  // the bounce cool while making it the paint's OWN cool: violet on red, teal on
+  // green, and still a straight blue on anything near-white.
+  vec3 skyRimTint = uRimColor * (0.35 + 1.2 * s.baseColor);
+  vec3 rimLight = (keyRimTint * keyRim * uKeyRimStrength
+                + skyRimTint * skyRim * uRimStrength) * curved;
 
   return diffuse + specular + rimLight;
 }
@@ -326,7 +403,11 @@ vec3 applyCelHaze(vec3 color, float dist, vec3 viewDirWorld) {
  */
 export function celUniformDefaults() {
   return {
-    uRimColor: { value: PALETTE.skyHaze.clone() },
+    // COOL. skyHaze is the warm sand at the horizon, and using it here put a
+    // khaki band around the shadow side of a crimson sphere — measured at
+    // rgb(205,163,142) on a surface whose darkest band was rgb(152,0,40). The
+    // shadow-side rim is bounced *sky*, and the sky above the horizon is cobalt.
+    uRimColor: { value: PALETTE.skyHigh.clone() },
     // Rim geometry: fres = (1 - N·V)^uRimPower, thresholded at uRimWidth.
     //
     // THE RIM MUST BE WIDER THAN THE INK. At the shipped 0.5 the band fired only
@@ -335,14 +416,23 @@ export function celUniformDefaults() {
     // ink band is 2 px. The rim was therefore drawn entirely *underneath* the
     // outline on every object in every capture, which is why probe-05-backlit
     // showed four backlit shapes and not one rim: the term was working and
-    // invisible. 0.30 puts the inner edge at 62 degrees, an 11%-of-radius band
-    // that clears the ink with room to read as light.
-    uRimPower: { value: 2.0 },
-    uRimWidth: { value: 0.3 },
+    // invisible.
+    //
+    // 0.30 fixed that and overshot: the band measured 16 px on the calibration
+    // sphere, which at that radius is a sixth of the visible surface and reads
+    // as an airbrushed glow rather than a stroke. 0.44 puts the inner edge at 55
+    // degrees — the outer 6% of a radius, 8 px on the same sphere — which is
+    // four times the ink's width and still unmistakably an edge.
+    // Power 2.6 rather than 2.0 narrows the band without moving its outer edge,
+    // which matters at close range: a sphere three radii from the camera shows
+    // far more of its own limb than a distant one, and at power 2 the rim was
+    // covering roughly a fifth of the visible surface in the close-up probe.
+    uRimPower: { value: 2.6 },
+    uRimWidth: { value: 0.44 },
     /** Cool sky rim on the shadow side: separation from the water behind. */
-    uRimStrength: { value: 0.85 },
+    uRimStrength: { value: 0.8 },
     /** Warm key rim on the sun side: the term that makes a shape read as drawn. */
-    uKeyRimStrength: { value: 0.6 },
+    uKeyRimStrength: { value: 0.55 },
     uSpecStrength: { value: 0.9 },
     uSpecSize: { value: 0.5 },
     /** Depth of the matcap's value modulation, centred so 0.5 grey is neutral. */

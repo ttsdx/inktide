@@ -390,6 +390,25 @@ export interface Checkpoint {
   readonly tangent: Vector3;
   /** Half-width of the gate opening, metres. Wider than the corridor. */
   readonly width: number;
+  /**
+   * Half-width used to decide whether a racer actually passed the gate, metres.
+   * Deliberately much wider than the visible opening.
+   *
+   * These are two different jobs and conflating them was wrong. The opening is
+   * scenery: it wants to be about as wide as the corridor so that driving
+   * through it reads as driving through a gate. The validation test only exists
+   * to stop a racer cutting the course and still banking the checkpoint, and the
+   * real protection against that is that gates must be taken in order, plus the
+   * single-frame displacement guard in `RaceDirector`.
+   *
+   * Sizing the test to the scenery meant a boat could be knocked outside the
+   * opening by contact and lose an entire lap — eighty-five seconds for a bump.
+   * That happened: two racers touched at gate 5 and both were disqualified from
+   * the lap in the same frame. Cutting still fails this test, because cutting
+   * any real corner on this circuit leaves the racer far further off line than
+   * being nudged does.
+   */
+  readonly validationWidth: number;
   /** True for the one gate that is also the start/finish line. */
   readonly startFinish: boolean;
 }
@@ -679,6 +698,9 @@ export class Course {
         // gate is a hard validation test, and a gate you can physically miss
         // while driving a legal line would be a bug.
         width: this.widthAt(t) + 7,
+        // See `Checkpoint.validationWidth`. The floor matters at the chicane,
+        // where the corridor is only 8.5 m and a nudge is otherwise fatal.
+        validationWidth: Math.max(this.widthAt(t) * 2.2, 26),
         startFinish: i === 0,
       });
     }

@@ -242,6 +242,7 @@ in vec3 outlineNormal;
 
 uniform float uWidthPx;
 uniform vec2 uViewport;
+uniform float uViewportHeight;
 uniform float uDistanceTaper;
 
 out float vViewDepth;
@@ -282,10 +283,24 @@ void main() {
   // turning into a black smear.
   float taper = mix(1.0, clamp(30.0 / depth, 0.30, 1.0), 1.0 - uDistanceTaper);
 
-  // One pixel spans 2/viewport units of NDC; multiplying by clip.w cancels the
-  // perspective divide so the offset survives as pixels.
+  // uWidthPx is quoted against a 1080-tall FRAMEBUFFER, not against the
+  // framebuffer actually in use. Without this scale the ink is a fixed number of
+  // device pixels, so the same width setting draws a 2.6 px line at the low
+  // preset and a 1.3 px line at ultra — measured, on the distance rig, at 1.23
+  // device pixels where the setting said 2.6. Turning the quality up made the
+  // ink visibly finer, which is not a quality setting, it is a different art
+  // style. Scaling by the framebuffer height fixes the line's share of the
+  // SCREEN rather than its share of the pixel grid, which is what "constant
+  // screen-space width" has to mean if it is to mean anything.
+  // Clamped at the bottom because proportionality stops being the right answer
+  // once the line drops below about two pixels: a 620-tall framebuffer would get
+  // a 1.5 px line and a small window would get less than one, at which point the
+  // ink is an antialiasing artefact rather than a drawn contour and the whole
+  // look collapses. Below the clamp the ink holds its absolute weight and the
+  // frame is simply drawn a little heavier, which is the failure mode to prefer.
+  float resScale = clamp(uViewportHeight / 1080.0, 0.8, 3.0);
   vec2 ndcPerPixel = 2.0 / uViewport;
-  clip.xy += dir * (uWidthPx * taper * facing) * ndcPerPixel * clip.w;
+  clip.xy += dir * (uWidthPx * resScale * taper * facing) * ndcPerPixel * clip.w;
 
   gl_Position = clip;
 }

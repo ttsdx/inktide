@@ -245,7 +245,11 @@ export const AI_AGGRESSIVE: AIPersonality = {
   boostChargeThreshold: 0.4,
   aggression: 0.95,
   clearance: 2.6,
-  mistakeRate: 1 / 21,
+  // Greed has to cost something. This is the highest error rate of the three
+  // after the erratic preset, and because mistakes now scale with how close to
+  // the limit the boat actually is, the aggressive line amplifies it further:
+  // this preset spends most of a lap in the band where errors are likely.
+  mistakeRate: 1 / 13,
   mistakeDuration: 1.25,
 };
 
@@ -266,15 +270,30 @@ export const AI_CLEAN: AIPersonality = {
   entryBias: 0.78,
   lineOffset: 0.05,
   wanderAmount: 0.02,
-  // Not the lowest budget in the field, which is the whole point of the preset:
-  // it corners as hard as the aggressive one but arrives at the corner at a
-  // speed it has actually planned for, so it never has to correct.
-  lateralBudget: 16.8,
-  brakeDecel: 17,
-  lateralJerkBudget: 12.5,
-  brakePointScale: 1.06,
+  // "Clean" has to mean precise, not timid: solo hot laps showed this preset
+  // 2.1 to 2.6 s/lap slower than the aggressive one on every hull, which is not
+  // a driver who wins by making no mistakes, it is just a slow driver. But the
+  // speed cannot come from the grip budget. Raising this to 17.4 produced *no*
+  // improvement in best lap (81.97 against 82.33) and a tail of races where the
+  // boat slid outside the corridor: 15 m/s^2 is about the honest figure on open
+  // swell, where the hull is out of the water a third of the time and the 22
+  // m/s^2 available on flat water simply is not there. The pace comes from
+  // braking at the right point and from the chicane instead.
+  lateralBudget: 15.0,
+  brakeDecel: 17.5,
+  lateralJerkBudget: 14,
+  brakePointScale: 0.97,
   minCornerFraction: 0.46,
-  driftCurvature: 0.011,
+  // Slides The Pin and the Kickback on purpose — charge only accrues while
+  // sideways, so a driver who never slides forfeits a boost every lap.
+  //
+  // Deliberately NOT low enough to catch the chicane, despite the chicane being
+  // tight enough to look like a drift. Measured: a drift held into a direction
+  // reversal costs about a fifth of the hull's lateral grip at exactly the
+  // moment it has to swap lock, and the clean preset slid 27 m wide there and
+  // missed the gate. The `reversalWithin` gate blocks it anyway; this keeps the
+  // preset's intent honest rather than relying on that backstop.
+  driftCurvature: 0.0105,
   driftSteerGain: 0.24,
   // Banks a near-full charge and spends it only on a genuine straight, so it
   // gets the whole boost duration at full throttle instead of half of it into a
@@ -354,25 +373,69 @@ const HORIZON_SAMPLES = 14;
  * enough that the direction change is happening now.
  */
 const JERK_CEILING_DISTANCE = 34;
+/** How far ahead an opposite-handed corner blocks committing to a slide. */
+const DRIFT_REVERSAL_DISTANCE = 46;
 /**
- * Curvature reversal rate, 1/m per m, above which the AI refuses to commit to a
- * slide. Tuned to sit below the Chicane Flick's reversal and above the ramp into
- * an ordinary corner, so the hairpin and the sweeper still get drifted.
+ * Share of its gripped cornering budget the AI expects to keep while sliding.
+ *
+ * The physics interpolates lateral grip from the hull's baseline down towards
+ * 4.3 as the drift builds, so a boat mid-slide has meaningfully less lateral
+ * force available. 0.78 on the budget is about 0.88 on the resulting corner
+ * speed, which matches what the hull can actually hold while sideways.
  */
-const DRIFT_TWIST_LIMIT = 3.2e-4;
+const DRIFT_GRIP_FACTOR = 0.78;
+/**
+ * Fraction by which the rubber band moves the drift threshold. At 0.45 a boat
+ * at the back of the field commits to a slide on corners 45% shallower than its
+ * personality would normally bother with, which over a lap is several extra
+ * boosts; a leader gives up the same amount.
+ */
+const DRIFT_CHASE_RANGE = 0.45;
+/**
+ * Curvature magnitude either side of a sign change for it to count as a real
+ * reversal rather than the spline wobbling through zero on a straight. 1/250 m.
+ */
+const REVERSAL_K = 0.004;
 
 /**
- * How hard the lookahead collapses when the boat is outside the corridor.
+ * Tangent of the angle at which a boat off the course is asked to come back to
+ * it — 0.62 is about 32 degrees.
  *
- * The divisor is `1 + excess * RECOVER_LOOKAHEAD_GAIN`, where `excess` is how
- * many corridor half-widths beyond the edge the boat is. At 2 half-widths out
- * with a gain of 1.6 the horizon is cut to 24% of normal, which turns a
- * 36 m aim point into 9 m — short enough that the heading error reflects the
- * lateral error rather than the course's forward direction.
+ * REJOIN GEOMETRY, AND WHY THE HORIZON MUST GROW RATHER THAN COLLAPSE
+ *
+ * The first attempt at recovery shortened the lookahead when the boat was off
+ * line, on the reasoning that a near aim point makes the heading error reflect
+ * the lateral error instead of the course's forward direction. That is true and
+ * it is also a trap. A boat 27 m off line aiming at a point 8 m ahead on the
+ * centreline has a 73 degree heading error: it takes full lock, crosses the line
+ * at that angle at 28 m/s, and arrives 30 m off on the *other* side, where the
+ * same logic fires in reverse. Traced on the probe it was a clean limit cycle,
+ * about four seconds a period, and it was the whole of the 30-50 m excursion
+ * figure — the boat was not thrown off the course by anything, it was steering
+ * itself back and forth across it.
+ *
+ * Choosing the aim distance as `lateralError / REJOIN_TANGENT` instead fixes the
+ * *approach angle* rather than the distance, so the boat converges on the line
+ * asymptotically however far off it starts, and the further out it is the
+ * further ahead it looks. 32 degrees is shallow enough not to overshoot at
+ * racing speed and steep enough to be back on line within a corner's length.
  */
-const RECOVER_LOOKAHEAD_GAIN = 1.6;
+const REJOIN_TANGENT = 0.62;
 /** Shortest the recovery horizon may become, metres. Below this it chases noise. */
 const RECOVER_LOOKAHEAD_MIN = 8;
+/**
+ * Longest, metres. A boat far enough off line to want more than this is better
+ * served by pointing at something it can see than by aiming most of a lap ahead.
+ */
+const REJOIN_LOOKAHEAD_MAX = 110;
+/**
+ * Corridor half-widths of `excess` over which the aim point blends from the
+ * racing-line horizon to the rejoin horizon. Blended rather than switched: the
+ * two differ by a factor of two at the corridor edge, and stepping the aim point
+ * as the boat crosses it puts a kink in the steering exactly where the boat is
+ * least able to absorb one.
+ */
+const REJOIN_BLEND_EXCESS = 0.5;
 
 /**
  * Steering authority the controller assumes while the hull is out of the water.
@@ -456,8 +519,32 @@ const MISTAKE_BASELINE = 0.18;
  */
 const WIDE_ENTRY_FRACTION = 0.5;
 
-/** Rubber band authority. +-8% of pace, per the brief. */
-const RUBBER_BAND_RANGE = 0.08;
+/**
+ * Rubber band authority, as a fraction of pace.
+ *
+ * The brief asked for "mild"; 8% was mild and left a 12.6 s spread, because the
+ * hulls themselves are 11% apart on top speed and the band was being asked to
+ * cover that as well as the driving. 13% is what actually holds the field
+ * together. Swept: 8% gives a 12.6 s spread, 13% gives 8.9 s, 18% gives 9.0 s
+ * on average but with a 7.5 s standard deviation — past about 15% the leader
+ * eases so hard that it drops into the pack, starts chasing, and the whole field
+ * oscillates. This sits below that.
+ */
+const RUBBER_BAND_RANGE = 0.13;
+/**
+ * Gap, in band units, inside which the band does nothing at all.
+ *
+ * Without this the leader is easing even when it leads by a boat length, which
+ * is both pointless and the thing that made larger ranges unstable: the racer
+ * in front is always giving something up, so the lead trades hands on noise.
+ */
+const RUBBER_BAND_DEADBAND = 0.12;
+/**
+ * Time constant, seconds, of the low pass on the rubber band input. See the
+ * comment at the use site: race position is a step signal and the cornering
+ * budget must not be.
+ */
+const BAND_TAU = 2.0;
 /**
  * Gap at which the rubber band saturates, metres. 260 m is roughly a tenth of a
  * lap: inside that the band is doing almost nothing, beyond it the trailing AI
@@ -479,6 +566,51 @@ const RUBBER_BAND_SATURATION = 260;
  * because a corner needs both the grip to hold it and the yaw authority to
  * rotate into it.
  */
+/**
+ * Time constant, seconds, of the airborne-fraction estimate.
+ *
+ * AIRTIME IS A GRIP BUDGET PROBLEM, AND IT IS THE BIG ONE
+ *
+ * `lateralBudget` was calibrated from `physicsProbe`-style steady-state
+ * cornering on open water, and it is right there: about 15 m/s^2. It is badly
+ * wrong on the parts of the circuit that matter. A hull out of the water has
+ * *no* lateral grip at all — the physics gates the entire hydrodynamic side
+ * force on `inWater` — and the chicane runs at 0.27 to the swell, which the
+ * course probe labels "ACROSS swell (airtime)". Boats are airborne for around
+ * 30% of a race and rather more than that through there.
+ *
+ * So the AI was planning the 60 m radius Chicane Flick at sqrt(15 x 60) =
+ * 30 m/s, taking it with a third of the corner spent ballistic, and running 30 m
+ * wide every single lap. That, not the mistake system, was the whole of the
+ * 44-50 m excursion figure: the boat was not recovering badly from an error, it
+ * was arriving at a corner it could not physically make.
+ *
+ * Rather than hard-coding a per-section fudge, the controller measures how much
+ * of the last few seconds it has actually spent in the air and derates its own
+ * grip budget by that fraction. It is self-calibrating — smooth along-swell
+ * sections like the Leeward Drag get the full budget, the Windward Run and the
+ * chicane get what they deserve — and it needs no knowledge of the sea state,
+ * which is a runtime property the AI has no business reading.
+ *
+ * Three seconds is long enough to average over individual crests and short
+ * enough to have adapted by the time the boat reaches the next corner.
+ */
+const AIR_TAU = 3.0;
+/** Ceiling on the derating, so a very rough sea cannot stop the AI racing. */
+const AIR_GRIP_LOSS_MAX = 0.42;
+
+/**
+ * Top-speed fraction given up per corridor half-width of `excess` while off the
+ * course.
+ *
+ * Without this the AI would run wide, find that the spline projection under a
+ * boat 30 m off line reports little curvature ahead, and go back to full
+ * throttle — measured accelerating from 20 to 27 m/s while 32 m off the racing
+ * line, which turned a recoverable error into the worst excursion in the race.
+ * Getting back on line is worth more than the two tenths.
+ */
+const OFFLINE_SPEED_LOSS = 0.42;
+
 function hullCorneringFactor(spec: BoatState['spec']): number {
   const grip = 9.5 + (3.2 - 9.5) * clamp(spec.slidiness, 0, 1);
   const gripFactor = grip / 6.35;
@@ -546,6 +678,12 @@ export class AIController {
   private launchLane = 0;
   private launchLaneTimer = -1;
 
+  /** Low-passed rubber band input. See BAND_TAU. */
+  private bandFiltered = 0;
+
+  /** Fraction of the last few seconds spent out of the water. See AIR_TAU. */
+  private airFraction = 0;
+
   /**
    * Grip/yaw scale for the hull this controller is driving. Latched on the first
    * update rather than in the constructor, because the controller is handed a
@@ -553,6 +691,13 @@ export class AIController {
    */
   private corneringFactor = 1;
   private specSeen = false;
+
+  /**
+   * Number of racers, used to normalise the field-position half of the rubber
+   * band. Taken from the state array each frame rather than the constructor so
+   * it stays correct whatever the grid size.
+   */
+  private fieldSize = 4;
 
   constructor(boatId: number, course: Course, personality: AIPersonality) {
     this.boatId = boatId;
@@ -584,6 +729,8 @@ export class AIController {
     this.recovering = false;
     this.launchLane = 0;
     this.launchLaneTimer = -1;
+    this.bandFiltered = 0;
+    this.airFraction = 0;
   }
 
   update(
@@ -602,6 +749,7 @@ export class AIController {
       this.specSeen = true;
       this.corneringFactor = hullCorneringFactor(state.spec);
     }
+    if (allStates.length > 1) this.fieldSize = allStates.length;
 
     // Reuse the director's projection when it is fresh, otherwise re-project
     // locally. Either way this is the O(1) hinted path.
@@ -616,14 +764,96 @@ export class AIController {
     // Positive gap means the player is ahead, so the AI pushes; negative means
     // the AI is leading, so it eases. Both directions, as required — a runaway
     // leader has to come back to you.
-    const band = clamp(gap / RUBBER_BAND_SATURATION, -1, 1) * RUBBER_BAND_RANGE * P.rubberBand;
+    const playerTerm = clamp(gap / RUBBER_BAND_SATURATION, -1, 1);
+
+    // Field position, as a second reference. The gap to the *player* is the one
+    // the brief specifies and the one that keeps the race feeling responsive to
+    // how you are driving, but on its own it does nothing about the AI field
+    // spreading out among itself: three opponents can string out over twenty
+    // seconds while all sitting at the same distance from the player. Blending
+    // in "where am I in the order" compresses the pack too, which is what makes
+    // positions actually change hands.
+    const middle = (this.fieldSize + 1) / 2;
+    const positionTerm = clamp((progress.position - middle) / Math.max(middle - 1, 1), -1, 1);
+
+    // Smoothed, because `position` is a discrete and very jumpy signal: two
+    // boats trading places every few seconds made the band step between full
+    // ease and none, and stepping the cornering budget around is exactly the
+    // kind of thing that puts a boat off the course. A two second time constant
+    // is far shorter than a lap and far longer than a place swap.
+    const bandTarget = clamp(playerTerm * 0.55 + positionTerm * 0.45, -1, 1);
+    this.bandFiltered += (bandTarget - this.bandFiltered) * (1 - Math.exp(-dt / BAND_TAU));
+    // Deadband, applied after the filter so it gates the smoothed signal rather
+    // than chattering on the raw one.
+    const bandInput =
+      Math.sign(this.bandFiltered) *
+      Math.max(0, Math.abs(this.bandFiltered) - RUBBER_BAND_DEADBAND) /
+      (1 - RUBBER_BAND_DEADBAND);
+    const band = bandInput * RUBBER_BAND_RANGE * P.rubberBand;
     const wanderPace = P.wanderAmount > 0.2 ? Math.sin(this.pacePhase + this.pacePhase) * 0.05 : 0;
-    const pace = 1 + band + wanderPace;
+
+    // ASYMMETRY, AND WHY IT MATTERS
+    //
+    // The band only ever slows a racer down. It is tempting to let a trailing AI
+    // scale its cornering budget *up*, and the first version did, but that
+    // budget is a measured physical limit rather than a statement of ambition:
+    // telling a boat it has 20% more lateral grip than the hull has does not
+    // make it faster, it makes it understeer off the course. That showed up
+    // exactly as you would expect — the field compressed nicely on average and
+    // sprouted a tail of races where somebody slid into the scenery.
+    //
+    // A trailing racer is already flat out (`Violet Reach` averages 97% of its
+    // top speed over a lap), so there is genuinely nothing to give it on the
+    // straights and nothing safe to give it in the corners. Compression
+    // therefore comes from the leader easing, which is both honest and
+    // invisible, plus `chase` below, which buys real time through boost rather
+    // than through imaginary grip.
+    const pace = 1 + Math.min(0, band) + wanderPace;
+
+    // How hard to chase boost, 0..1 either side of neutral. This is where the
+    // band gets most of its real authority, because straight-line pace has none
+    // to give: on a straight the throttle is already wide open and `targetSpeed`
+    // is clamped to the hull's top speed, so a pace multiplier above 1 is a
+    // no-op there. A boost, by contrast, is worth +14 m/s for nearly two
+    // seconds, and the AI controls it completely — charge accrues while the
+    // drift button is held and fires when it is released. So a trailing racer
+    // commits to a slide on shallower corners than it otherwise would, banks
+    // more charge and cashes more boosts; a leading one stops bothering.
+    // One-sided. Letting a *leader* chase less looks symmetrical and is in fact
+    // counterproductive: refusing to drift keeps the hull stuck, a stuck hull
+    // has more lateral grip, and so a leader that stopped drifting simply
+    // cornered faster and cancelled the easing above. Measured: it wiped out
+    // essentially all of a 5.6% pace reduction. Leaders ease on pace and are
+    // left to drift normally.
+    const chase = clamp(Math.max(0, bandInput) * P.rubberBand, 0, 1);
+
+    // Airtime, and therefore how much of the hull's measured grip is actually
+    // going to be available through the next corner. See AIR_TAU.
+    this.airFraction +=
+      ((state.airborne ? 1 : 0) - this.airFraction) * (1 - Math.exp(-dt / AIR_TAU));
+    const gripAvailable = 1 - Math.min(this.airFraction, AIR_GRIP_LOSS_MAX);
 
     // Cornering budget for this hull at this pace. Needed before the mistake
     // roll, because how close the AI is to this number is what decides whether
     // it makes one.
-    const latBudget = P.lateralBudget * pace * this.corneringFactor;
+    const latBudget = P.lateralBudget * pace * this.corneringFactor * gripAvailable;
+
+    // Drift intent, settled early because whether the hull will be stuck or
+    // sliding changes how fast every corner in the horizon can be taken.
+    //
+    // A drift commits the hull to sliding one way. Into an S-bend that is
+    // exactly wrong: the slide has to be unwound before the second element can
+    // be turned into, and at chicane speeds there is not enough road to do it.
+    //
+    // Note this tests for an imminent *reversal*, not for a high rate of change
+    // of curvature. Every corner entry has a high rate of change — that is what
+    // an entry is — so gating on the rate suppressed the drift everywhere,
+    // including at the hairpin where it is most wanted, and cost the field its
+    // boost charge along with it.
+    const reversalAhead = this.reversalWithin(t, DRIFT_REVERSAL_DISTANCE);
+    // Trailing racers slide on shallower corners to farm charge; leaders raise
+    // the bar and coast. See `chase`.
+    const driftK = P.driftCurvature * (1 - chase * DRIFT_CHASE_RANGE);
 
     // -----------------------------------------------------------------------
     // 2. LINE — where on the corridor to aim
@@ -646,11 +876,23 @@ export class AIController {
     const spun = courseHeadingError > RECOVER_HEADING;
     this.recovering = excess > 0.15 || spun;
 
-    const lookahead = Math.max(
-      RECOVER_LOOKAHEAD_MIN,
-      clamp(P.lookaheadBase + speed * P.lookaheadPerSpeed, P.lookaheadBase, 140) /
-        (1 + excess * RECOVER_LOOKAHEAD_GAIN),
+    const cruiseLookahead = clamp(
+      P.lookaheadBase + speed * P.lookaheadPerSpeed,
+      P.lookaheadBase,
+      140,
     );
+    // See REJOIN_TANGENT. Off the course, aim at whatever distance makes the
+    // approach angle constant.
+    let lookahead = cruiseLookahead;
+    if (excess > 0) {
+      const rejoin = clamp(
+        Math.abs(lateralNow) / REJOIN_TANGENT,
+        RECOVER_LOOKAHEAD_MIN,
+        REJOIN_LOOKAHEAD_MAX,
+      );
+      const blend = clamp(excess / REJOIN_BLEND_EXCESS, 0, 1);
+      lookahead = cruiseLookahead + (rejoin - cruiseLookahead) * blend;
+    }
     const aheadT = this.course.advance(t, lookahead);
     this.course.sampleInto(aheadT, this.aheadPoint);
 
@@ -675,6 +917,12 @@ export class AIController {
       inCorner: Math.abs(kAhead) > CORNER_K,
       drifting: state.driftAmount > 0.25,
       offLine: excess,
+      // Which way is "wide". Running wide means being carried to the outside of
+      // the corner, so the sign is opposite the curvature. Rolling it at random
+      // instead meant half of all wide entries pushed the boat towards the apex
+      // and across the course, and two of them in quick succession with opposite
+      // signs swept the hull 24 m sideways in two seconds.
+      cornerSign: -Math.sign(kEntry || kAhead) || 1,
     });
 
     let offsetFraction = P.lineOffset;
@@ -805,8 +1053,32 @@ export class AIController {
     // into a boat it is overlapped with. Leaving this at `1 - aggression * 0.85`
     // let the clean preset keep 70% of a turn-in towards a neighbour, which is
     // how the start-line contact happened.
-    if (avoid.blockSide !== 0 && Math.sign(steer) === avoid.blockSide) {
-      steer *= clamp(0.34 - P.aggression * 0.22, 0.05, 0.34);
+    //
+    // UNLESS THERE IS NO ROAD LEFT
+    //
+    // Absolute courtesy is the wrong rule and it cost a race: `Violet Reach`
+    // arrived at the Coral Turn alongside someone on its inside, held 30% of the
+    // turn-in it needed all the way through, ran 26 m wide, and drove straight
+    // past the chicane gate. Refusing to turn in is only a real option while
+    // there is still course to run wide onto; as that runs out the courtesy has
+    // to be handed back, and the correct way to resolve the overlap becomes
+    // separating in time rather than in space — which is what `blockedLift`
+    // below does. Rolled off smoothly against the road remaining so the boat
+    // does not simply lean on its neighbour the instant things get tight.
+    let blockedLift = 0;
+    if (avoid.blockSide !== 0) {
+      const roomLeft = clamp(
+        1 - Math.abs(lateralNow) / Math.max(this.nearPoint.width, 1),
+        0,
+        1,
+      );
+      if (Math.sign(steer) === avoid.blockSide) {
+        const courtesy = clamp(0.34 - P.aggression * 0.22, 0.05, 0.34);
+        steer *= courtesy + (1 - courtesy) * (1 - roomLeft);
+      }
+      // Back out of it. A driver who cannot take the line they need lifts;
+      // holding the throttle flat and hoping is how you end up in the scenery.
+      blockedLift = clamp(1 - roomLeft * 1.5, 0, 1);
     }
 
     // Do not wind on lock the hull cannot use. See AIR_STEER_SCALE.
@@ -865,7 +1137,20 @@ export class AIController {
 
       if (k < 1e-5) continue;
 
-      const cornerSpeed = Math.max(floor, Math.sqrt(latBudget / k));
+      // Would the AI be sliding through this particular sample? If so it has
+      // less grip to hold the line with, not more, and must plan a lower speed.
+      //
+      // This coupling was missing and it was the most expensive error left in
+      // the controller. Corner speed was computed from the hull's gripped budget
+      // and the drift was then switched on independently, so at The Pin the
+      // clean preset would arrive at exactly the 30 m/s its gripped budget
+      // allowed, unstick the hull, lose a fifth of its lateral force and slide
+      // 28 m wide — then carry that error into the chicane and miss the gate.
+      // Drifting buys rotation and boost charge; it does not buy cornering grip.
+      const slidingHere = !reversalAhead && k > driftK;
+      const budgetHere = slidingHere ? latBudget * DRIFT_GRIP_FACTOR : latBudget;
+
+      const cornerSpeed = Math.max(floor, Math.sqrt(budgetHere / k));
       if (cornerSpeed >= speed) continue;
 
       // Classic braking point: how much room does it take to lose this much
@@ -885,6 +1170,16 @@ export class AIController {
     if (this.mistake === 'bogged') targetSpeed = Math.min(targetSpeed, topSpeed * 0.45);
     if (recovering) targetSpeed = Math.min(targetSpeed, topSpeed * 0.82);
 
+    // Off the course: getting back matters more than the lap time, and the
+    // curvature scan is unreliable out here anyway because it is reading the
+    // spline under a boat that is not on it. See OFFLINE_SPEED_LOSS.
+    if (excess > 0) {
+      targetSpeed = Math.min(
+        targetSpeed,
+        topSpeed * (1 - Math.min(excess, 1) * OFFLINE_SPEED_LOSS),
+      );
+    }
+
     // Pointing the wrong way: get the nose round before worrying about pace.
     if (spun) {
       targetSpeed = Math.min(targetSpeed, topSpeed * RECOVER_SPEED_FRACTION);
@@ -900,10 +1195,11 @@ export class AIController {
     // Lift for a boat we cannot pass. An aggressive driver leaves it later and
     // lifts less — it will still nudge the boat in front — but nobody gets to
     // drive straight through the back of someone.
-    if (avoid.lift > 0) {
+    const lift = Math.max(avoid.lift, blockedLift);
+    if (lift > 0) {
       const respect = 1 - P.aggression * 0.45;
-      throttle *= 1 - avoid.lift * respect;
-      if (avoid.lift > 0.75) brake = Math.max(brake, (avoid.lift - 0.75) * 2.4 * respect);
+      throttle *= 1 - lift * respect;
+      if (lift > 0.75) brake = Math.max(brake, (lift - 0.75) * 2.4 * respect);
     }
     // Feed the pace band into the throttle too, but only where there is headroom
     // — at full throttle a multiplier above 1 would do nothing, which is why the
@@ -919,15 +1215,10 @@ export class AIController {
     // Hold the slide through anything tighter than the personality's threshold,
     // but only once actually moving: initiating a drift from a standstill just
     // scrubs speed.
-    // A drift commits the hull to sliding one way. Into an S-bend that is
-    // exactly wrong: the slide has to be unwound before the second element can
-    // be turned into, and at chicane speeds there is not enough road to do it.
-    // So the drift is gated on the corner being a sustained one.
-    const twisting = worstTwist > DRIFT_TWIST_LIMIT;
     let wantDrift =
-      !twisting &&
+      !reversalAhead &&
       speed > topSpeed * 0.34 &&
-      (worstCurvature > P.driftCurvature || Math.abs(kAhead) > P.driftCurvature);
+      (worstCurvature > driftK || Math.abs(kAhead) > driftK);
     // Recovering from a spin, the slide is the fastest way to rotate: unsticking
     // the hull adds 62% to its yaw authority in the physics. Only worth it while
     // there is enough speed for the drift to engage at all.
@@ -937,7 +1228,7 @@ export class AIController {
     // Cash the boost in on the exit, not in the corner: wait until the track
     // ahead is straight enough that the extra speed can be used.
     this.wantsBoost =
-      state.boostCharge >= P.boostChargeThreshold &&
+      state.boostCharge >= P.boostChargeThreshold * (1 - chase * 0.35) &&
       state.boostTime <= 0 &&
       worstCurvature < P.boostCurvature &&
       brake < 0.05 &&
@@ -978,6 +1269,13 @@ export class AIController {
         speed,
         mistake: this.mistake,
         lift: avoid.lift,
+        pace,
+        band,
+        bandInput,
+        chase,
+        position: progress.position,
+        latBudget,
+        targetSpeed,
         blockSide: avoid.blockSide,
         avoidOffset: avoid.offsetFraction,
         width: this.aheadPoint.width,
@@ -1031,6 +1329,7 @@ export class AIController {
       inCorner: boolean;
       drifting: boolean;
       offLine: number;
+      cornerSign: number;
     },
   ): void {
     const P = this.personality;
@@ -1083,10 +1382,27 @@ export class AIController {
       this.mistake = 'bogged';
     }
 
-    this.mistakeSign = this.rng() < 0.5 ? -1 : 1;
+    this.mistakeSign = ctx.cornerSign;
     // Duration jittered +-30% so the same mistake does not always last the
     // same time and become learnable.
     this.mistakeTimer = P.mistakeDuration * (0.7 + this.rng() * 0.6);
+  }
+
+  /**
+   * True if the course changes hand within `distance` metres — the signed
+   * curvature flips sign with real magnitude on both sides. Four samples is
+   * plenty: the shortest element on the circuit is the 22 m chicane link, and
+   * the curvature table is already smoothed over roughly a hull length.
+   */
+  private reversalWithin(t: number, distance: number): boolean {
+    let reference = 0;
+    for (let i = 0; i <= 4; i++) {
+      const k = this.course.signedCurvatureAt(this.course.advance(t, (distance * i) / 4));
+      if (Math.abs(k) < REVERSAL_K) continue;
+      if (reference === 0) reference = Math.sign(k);
+      else if (Math.sign(k) !== reference) return true;
+    }
+    return false;
   }
 
   // -------------------------------------------------------------------------

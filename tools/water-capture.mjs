@@ -103,6 +103,7 @@ function parseArgs(argv) {
     // Isolates the ocean's own foam from the wake field and the spray, which is
     // the only way to tell which system is responsible for a given white pixel.
     else if (a === '--no-wake') out.noWake = true;
+    else if (a === '--debug') out.debug = Number(next());
   }
   return out;
 }
@@ -351,10 +352,20 @@ async function main() {
         ];
         window.__INKTIDE__.harness.setFreeCamera(pos, aim);
       }, shot.camera);
+      await page.evaluate((m) => window.__INKTIDE__.ocean.setDebug(m), args.debug ?? 0);
       await page.evaluate(() => window.__INKTIDE__.harness.renderFrames(3));
 
+      // Read the WebGL canvas directly rather than screenshotting the element.
+      // The renderer is created with preserveDrawingBuffer, so this is the
+      // exact framebuffer at device resolution, and it skips Playwright's
+      // element-stability wait — which never settles on a paused page under a
+      // software rasteriser and timed out on all six shots at retina scale.
       const file = path.join(args.outDir, `${shot.id}.png`);
-      await page.locator('#scene').screenshot({ path: file, scale: 'device', timeout: 90000 });
+      const dataUrl = await page.evaluate(() => {
+        const c = document.getElementById('scene');
+        return c.toDataURL('image/png');
+      });
+      await writeFile(file, Buffer.from(dataUrl.split(',')[1], 'base64'));
       results.push({ id: shot.id, file, ms: Date.now() - started });
       console.log(`ok  (${Date.now() - started}ms)`);
     } catch (err) {

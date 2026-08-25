@@ -143,6 +143,7 @@ export class Ocean {
         /** Fold window for the drawn crest contour, just below the foam. */
         uRimFold: { value: new Vector2(0.2, 0.3) },
         uFoamBreakup: { value: 0.34 },
+        uDebug: { value: 0 },
         uSparkleAmount: { value: 1.0 },
         uSparkleDensity: { value: 0.62 },
         uDetailStrength: { value: 1.0 },
@@ -161,6 +162,14 @@ export class Ocean {
     this.mesh.userData.noOutline = true;
     this.mesh.renderOrder = 0;
     this.mesh.layers.set(LAYER_OCEAN);
+  }
+
+  /**
+   * Render individual shading terms instead of the finished surface, for the
+   * capture harness. 0 is off, and is the only value the game ever sets.
+   */
+  setDebug(mode: number): void {
+    this.material.uniforms.uDebug.value = mode;
   }
 
   /** Point the wake foam field at a render target texture. */
@@ -491,6 +500,7 @@ uniform vec3 uBandMix;
 uniform float uFoamFold;
 uniform vec2 uRimFold;
 uniform float uFoamBreakup;
+uniform float uDebug;
 uniform float uSparkleAmount;
 uniform float uSparkleDensity;
 uniform float uDetailStrength;
@@ -652,8 +662,12 @@ float foamNoise(vec2 p, float t, float px) {
   // *along* the crest line, not isotropically: an unsquashed noise gives round
   // blobs of foam, which is the difference between spume and cotton wool. The
   // direction is the first entry of the WAVES table, normalised.
+  // 2.3:1, not the 4.3:1 this started at. Foam grain genuinely is directional,
+  // but past about 2.5:1 the difference between "streaky" and "combed" stops
+  // being a matter of degree: the noise loses its blobs entirely and every
+  // contour drawn through it becomes a long parallel stroke.
   vec2 dir = vec2(0.9550, 0.2965);
-  vec2 s = vec2(dot(p, dir) * 2.05, dot(p, vec2(-dir.y, dir.x)) * 0.48);
+  vec2 s = vec2(dot(p, dir) * 1.55, dot(p, vec2(-dir.y, dir.x)) * 0.68);
 
   float big = noiseR(s * 0.021 + vec2(t * 0.009, -t * 0.005));
   float mid = noiseG(s * 0.098 - vec2(t * 0.028, t * 0.017));
@@ -667,22 +681,22 @@ float foamNoise(vec2 p, float t, float px) {
   // surface must never look like. The macro streaks genuinely are directional,
   // because that is foam being dragged down the face of a wave, but the tear at
   // the boundary of a foam patch has no direction at all.
-  float fine = noiseA(p * 0.42 + vec2(-t * 0.046, t * 0.038));
-
-  // Band-limit the tear octave, the same way each ripple octave rejects itself.
+  // The tear octave slides its FREQUENCY down with the pixel footprint rather
+  // than fading its amplitude out.
   //
-  // Its features are about 2.4 m across, so once a pixel covers more water than
-  // that there is less than one sample per feature and what it contributes is
-  // not detail but aliasing. It arrived as a fine crawling stipple across the
-  // whole mid-ground that read as pencil hatching scribbled over the foam —
-  // worse than the corduroy it replaced, because it moves.
+  // Fading it out is the obvious way to stop it aliasing, and it was worse than
+  // the aliasing. This is the only isotropic octave of the three; with it gone,
+  // the foam boundary in the mid-ground was drawn entirely by the two squashed
+  // ones, and the capture filled with long parallel diagonal streaks. Combing
+  // is a far more damaging artefact than stipple, because stipple at least
+  // looks like an accident and a comb looks like a texture someone chose.
   //
-  // The two surviving octaves are re-weighted rather than simply summed, so the
-  // mean stays at 0.5 and the range does not shrink as the fine octave leaves.
-  // Every foam threshold in this file is tuned against that mean, and letting
-  // it drift would quietly re-tune all of them by distance.
-  float fw = 0.20 * (1.0 - smoothstep(0.6, 1.8, px));
-  return (big * 0.46 + mid * 0.34 + fine * fw) / (0.80 + fw) - 0.5;
+  // Sliding the frequency keeps a tear at every distance and holds its feature
+  // size near three pixels, which is above the sampling limit everywhere, so
+  // the edge is torn in the near field and still torn at the horizon.
+  float fineScale = 0.42 / (1.0 + px * 1.3);
+  float fine = noiseA(p * fineScale + vec2(-t * 0.046, t * 0.038));
+  return (big * 0.46 + mid * 0.34 + fine * 0.20) - 0.5;
 }
 
 /**
@@ -775,7 +789,7 @@ void main() {
   // Handing it the pessimistic curve threw away structure that would have
   // rendered perfectly well: water twenty metres from a chase camera, the
   // busiest and most-looked-at part of the frame, came back as plain blue.
-  float detail = min(vDetail, 1.0 - smoothstep(0.6, 3.0, px));
+  float detail = min(vDetail, 1.0 - smoothstep(0.45, 2.6, px));
 
   float detailAmt = uDetailStrength * detail;
   vec3 dw = detailWave(p, uTime, px) * detailAmt;
@@ -827,7 +841,21 @@ void main() {
 
   float b1 = hardStep(uBands.x, mix(band, bandBroad, 0.62));
   float b2 = hardStep(uBands.y, mix(band, bandBroad, 0.35));
-  float b3 = hardStep(uBands.z, band);
+  // The top band takes some of the broad coordinate too, where it used to be
+  // cut against the fully rippled one.
+  //
+  // Cutting the palest tone against the per-pixel ripple prints the ripple's
+  // own periodicity as colour: each octave is a directional wave train, so the
+  // threshold lands on every ridge and the surface fills with even rows of pale
+  // dashes. It hid while the detail term was pessimistic enough to switch the
+  // ripple off beyond a few metres, and reappeared across the whole near field
+  // the moment that term was relaxed — which made it look like a foam artefact
+  // and cost several rounds chasing it through the foam noise. It was never
+  // foam; it was the crest tone, drawn on every ripple.
+  //
+  // The ripple still lifts the band — that is what gives near water its
+  // surface — but no longer decides on its own where the palest tone starts.
+  float b3 = hardStep(uBands.z, mix(band, bandBroad, 0.30));
 
   // The deepest tone is lifted a fifth of the way towards the mid blue. Raw
   // waterDeep does not survive the composite: the grade pushes saturation to
@@ -943,7 +971,21 @@ void main() {
   // 60 m there is always some of each in shot.
   float clumpN = noiseR(p * 0.0160 + vec2(uTime * 0.004, -uTime * 0.003));
   float clump = smoothstep(0.30, 0.62, clumpN);
-  float crestSignal = vFold * foamGate * mix(0.42, 1.70, clump);
+  // Squared, not linear. This is what stops foam drawing slivers.
+  //
+  // The fold signal is a field of parallel ridges, and a linear drive against a
+  // fixed threshold puts a thin stroke of foam on every one of them — hundreds
+  // of parallel strokes across the near field, which reads as hatching rather
+  // than as spume, and which no amount of work on the breakup noise could fix
+  // because the periodicity is in the water and not in the noise. Squaring the
+  // drive widens the gap between a ridge that is genuinely breaking and one
+  // that is merely present: a strong crest keeps all its foam and a marginal
+  // one loses it entirely, instead of every ridge getting a share.
+  //
+  // The 2.1 puts the peak back where it was, so the composite thresholds below
+  // did not have to be retuned around this.
+  float raw = vFold * foamGate;
+  float crestSignal = raw * raw * 2.1 * mix(0.42, 1.70, clump);
 
   // -----------------------------------------------------------------------
   // 6. FOAM SOURCE B — THE PERSISTENT WAKE FIELD
@@ -1008,7 +1050,12 @@ void main() {
     // Vertical falloff: a boat 4 m in the air should not foam the water.
     float vertical = 1.0 - smoothstep(0.6, 3.2, abs(A.y - vWorldPos.y));
 
-    float ring = (1.0 - smoothstep(0.5, 1.1, r)) * B.x * vertical;
+    // The radius is perturbed by the shared breakup noise, so the ring tears
+    // like every other foam source. Without it the hull's contact foam is the
+    // one perfectly smooth ellipse in a frame of hand-torn shapes, and a
+    // no-wake capture showed it doing exactly that — a clean white lozenge
+    // sitting on the water like a sticker.
+    float ring = (1.0 - smoothstep(0.5, 1.1, r + fn * 0.22)) * B.x * vertical;
     contact = max(contact, ring);
   }
 
@@ -1058,10 +1105,28 @@ void main() {
   // Distant foam loses its detail rather than boiling into noise.
   foamSignal *= mix(0.55, 1.0, detail);
 
+  // The threshold RISES with the pixel footprint. It is the only term in the
+  // foam composite that is not a constant, and it is doing the most work.
+  //
+  // Chop is a field of roughly parallel ridges, so the fold signal crosses any
+  // fixed threshold periodically in space. Near the camera that is exactly what
+  // is wanted — foam picks out individual crests. At mid distance, where one
+  // ridge is a couple of pixels across, it instead produces one thin sliver per
+  // ridge over a very large area, and a few hundred parallel slivers is not
+  // foam, it is hatching. The captures showed it as a comb lying across the
+  // whole mid-ground, and it was the last and most stubborn artefact here:
+  // narrowing the noise, band-limiting it and re-warping it all failed, because
+  // the periodicity was never in the noise. It was in the water.
+  //
+  // Charging distant foam more means only genuinely strong crests keep it,
+  // which is both what real water does and what a background painter does: near
+  // foam is drawn crest by crest, far foam is implied with two or three shapes.
+  float foamFold = uFoamFold + 0.30 * smoothstep(0.25, 1.6, px);
+
   float torn = foamSignal - fn * uFoamBreakup;
-  float foamEdge = hardStep(uFoamFold, torn);
-  float foamCore = hardStep(uFoamFold + 0.19, torn - fn * 0.12);
-  float foamHalo = hardStep(uFoamFold - 0.11, torn);
+  float foamEdge = hardStep(foamFold, torn);
+  float foamCore = hardStep(foamFold + 0.19, torn - fn * 0.12);
+  float foamHalo = hardStep(foamFold - 0.11, torn);
 
   float freshness = clamp(max(wakeFresh, crestSignal * 2.0 + depthFoam + contact), 0.0, 1.0);
   vec3 foamCol = mix(uFoamShade, uFoam, clamp(foamCore * 0.75 + freshness * 0.45, 0.0, 1.0));
@@ -1134,13 +1199,48 @@ void main() {
   // strokes have to stack up the path towards the sun, like rungs.
   vec2 sdir = normalize(vec2(SUN_DIR.x, SUN_DIR.z));
   vec2 sperp = vec2(sdir.y, -sdir.x);
-  vec2 gp = vec2(dot(p, sdir) * 1.9, dot(p, sperp) * 0.34);
+  // 2.3:1 and shallow, where this started at 5.6:1 and near-total. A strongly
+  // squashed noise cut hard is a comb, and a comb laid over a broad specular
+  // region is the single most artificial thing that appeared in any capture
+  // here. The strokes only have to suggest separate crests; the eye finishes
+  // the job, and the glitter lattice above is already doing the punctuation.
+  vec2 gp = vec2(dot(p, sdir) * 1.4, dot(p, sperp) * 0.62);
   float dashN = noiseG(gp * 0.36 + vec2(uTime * 0.06, -uTime * 0.021));
   // Never all the way to zero: the gaps are duller water, not holes punched in
   // the reflection, and a fully cut path reads as a stencil laid over the sea.
-  float dash = mix(0.30, 1.0, fixedStep(0.47, dashN, 0.02));
+  float dash = mix(0.62, 1.0, fixedStep(0.47, dashN, 0.02));
 
-  float pathFade = detail * (1.0 - foamEdge) * dash;
+  // Confine the whole path to the sun's actual reflection road, measured with
+  // the BROAD surface normal rather than the rippled one.
+  //
+  // This is the single most damaging bug found in this file. specRaw comes from
+  // the per-pixel rippled normal, and a ripple field is periodic, so on its own
+  // it crosses the path thresholds once per ridge — not in the sun's reflection
+  // but everywhere the surface exists. The frame filled with even parallel pale
+  // strokes across the entire near and mid ground, and because they are made of
+  // uCrest and uFoam they read as foam, which sent several rounds of work into
+  // the foam system looking for a defect that was never there. A term isolation
+  // pass found it in one capture: the strokes were exactly the sun path.
+  //
+  // The swell normal has no ripple periodicity, so thresholding it gives the
+  // smooth elongated road that a sun genuinely lays on water. The ripple is
+  // then free to break that road into strokes *inside* it, which is the effect
+  // that was wanted all along — and is now confined to where it belongs.
+  // The gate is the sun's AZIMUTH, not the surface normal. Only water that lies
+  // between the viewer and the sun's bearing can mirror the sun back at this
+  // camera, and unlike any normal-based test that fact does not care what the
+  // local ripple is doing — which is the whole point, because the ripple is
+  // what was leaking the path across the entire surface.
+  //
+  // A normal-based gate was tried first and failed: with a specular exponent of
+  // 64, ripple slopes of a fifth of a radian are more than enough to swing a
+  // pixel into the lobe, so the "path" reported itself as present over most of
+  // the frame no matter how the lobe was shaped.
+  vec2 sunAz = normalize(vec2(SUN_DIR.x, SUN_DIR.z));
+  vec2 toPix = normalize(p - cameraPosition.xz + vec2(1e-5, 0.0));
+  float road = smoothstep(0.72, 0.96, dot(toPix, sunAz));
+
+  float pathFade = detail * (1.0 - foamEdge) * dash * road;
   col = mix(col, uCrest, pathA * 0.42 * pathFade);
   col = mix(col, mix(uFoam, uSunTint, 0.35), pathB * 0.7 * pathFade);
 
@@ -1161,6 +1261,19 @@ void main() {
   col = mix(col, hazeCol, fogT * 0.9);
 
   outColor = vec4(col, 1.0);
+
+  // Term isolation for the capture harness. Each channel carries one candidate
+  // so a single frame says which one owns an artefact, instead of a round of
+  // captures per guess.
+  if (uDebug > 0.5) {
+    if (uDebug < 1.5)      outColor = vec4(foamEdge, b3, sunPlane, 1.0);
+    else if (uDebug < 2.5) outColor = vec4(
+      clamp(foamHalo - foamEdge, 0.0, 1.0) * 0.75,
+      pathA * 0.42 * pathFade + pathB * 0.7 * pathFade,
+      glitterMask,
+      1.0);
+    else                   outColor = vec4(contour, b2, sunPlane * 0.82, 1.0);
+  }
 
   // The ocean writes into the edge buffer with a heavily flattened normal.
   //

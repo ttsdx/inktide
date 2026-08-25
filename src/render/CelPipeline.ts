@@ -46,8 +46,16 @@ export interface PipelineQuality {
   bloomScale: number;
 }
 
-/** Bloom mix at full quality. Kept as a constant so a harness sweep survives. */
-const BLOOM_STRENGTH = 0.42;
+/**
+ * Bloom mix at full quality. Kept as a constant so a harness sweep survives.
+ *
+ * Swept at 0, 0.28 and 0.5 on the knot frame. 0.28 is very nearly free — a
+ * touch of energy on the hottest highlight and nothing else moves — while by 0.5
+ * the banded highlights had started to soften and a faint halo was showing
+ * outside the ink, which is the one thing bloom is not allowed to cost here.
+ * 0.3 sits just above the free point.
+ */
+const BLOOM_STRENGTH = 0.3;
 
 export const QUALITY_PRESETS: Record<'low' | 'medium' | 'high' | 'ultra', PipelineQuality> = {
   low: { pixelRatio: 1.0, samples: 0, bloom: false, interiorLines: false, bloomScale: 4 },
@@ -160,6 +168,8 @@ export class CelPipeline {
       {
         tColor: { value: null },
         tNormalDepth: { value: null },
+        /** The post-ocean attachment, used only to reject drowned pixels. */
+        tPostND: { value: null },
         uTexel: { value: new Vector2() },
         // A Sobel over unit normals maxes out near 5.7 (a 180-degree flip across
         // the kernel). An icosahedron's 41-degree facet edge measures about 2.8
@@ -178,12 +188,18 @@ export class CelPipeline {
         // Curvature this large cannot be a crease — it is one surface ending
         // and another beginning, which the hull shell has already inked.
         uSilhouetteReject: { value: 0.45 },
-        // Relative screen-space depth slope above which the normal term is
-        // treated as a raking surface rather than a crease. Swept live against
-        // the isolated mask: at 0.16 the water still showed strokes near the
-        // horizon, at 0.05 the crease stack's own decks started thinning where
-        // they turn away. 0.09 is the middle of the usable gap.
-        uGrazeReject: { value: 0.09 },
+        // Relative screen-space depth slope above which a surface is treated as
+        // raking away from the camera rather than facing it, and its normal
+        // gradient as foreshortening rather than a crease.
+        //
+        // This is a safety net for opaque geometry only — a long deck seen from
+        // astern, a ramp at the horizon — where the normal Sobel would otherwise
+        // scribble on a surface whose detail is under a pixel wide. It is NOT
+        // the water fix; see the note where tNormalDepth is bound. Kept as loose
+        // as it can be and still do that job: the swept coverage on the
+        // calibration crease stack was 1.56% unsuppressed, 1.35% at 0.20 and
+        // 1.07% at 0.13, so tightening past 0.20 starts eating real creases.
+        uGrazeReject: { value: 0.3 },
         uLineStrength: { value: 0.95 },
         uInk: { value: PALETTE.ink.clone() },
         uCameraFar: { value: 4000 },
@@ -225,12 +241,17 @@ export class CelPipeline {
         tBloom: { value: null },
         uBloomStrength: { value: BLOOM_STRENGTH },
         uVignette: { value: 0.18 },
-        // 1.22 measured out at *fully clipped* chroma on the calibration
-        // sphere: the green channel of every band below the highlight landed on
-        // zero, so four ramp bands rendered as two. A saturation boost only
-        // helps a desaturated render, and this palette is not one.
-        uSaturation: { value: 1.1 },
-        uContrast: { value: 1.16 },
+        // Swept as a 3x3 grid against the knot frame and scored on mean
+        // saturation versus clipped-pixel count, because "more contrasty" and
+        // "more saturated" both look better in isolation and only one of them is
+        // cheap. Saturation 1.25 with contrast 1.16 and contrast 1.30 with
+        // saturation 1.10 land on identical mean chroma (0.671), but the
+        // saturation route clips 12.7% of pixels against the contrast route's
+        // 16.0%. Doing both gained 0.011 more chroma for another 8 points of
+        // clipping, which is not a trade. So: take it out of saturation, and
+        // spend only as much contrast as the ocean's band separation needs.
+        uSaturation: { value: 1.25 },
+        uContrast: { value: 1.2 },
         uExposure: { value: 1.08 },
         uTexel: { value: new Vector2() },
         uTime: { value: 0 },
@@ -364,7 +385,23 @@ export class CelPipeline {
     if (this.quality.interiorLines) {
       const u = this.sobelPass.uniforms;
       u.tColor.value = colorTex;
-      u.tNormalDepth.value = this.main.textures[1];
+      // THE PRE-OCEAN SNAPSHOT, not the final attachment.
+      //
+      // depthCopy is taken between the opaque slice and the ocean slice — it
+      // exists so the water can read the geometry it is about to draw over — and
+      // that makes it exactly the buffer the interior-line pass wants: opaque
+      // geometry and nothing else. Running the Sobel on the final attachment put
+      // the ocean in front of it, and no threshold could get the water out. A
+      // sweep of the grazing reject bears that out: taking the water's ink from
+      // 1.44% coverage down to 0.93% cost the calibration crease stack half of
+      // its lines, because at a wave crest the water genuinely self-occludes and
+      // the curvature it produces is the same measurement a hull crease makes.
+      // The two are not separable by threshold. They are trivially separable by
+      // which slice drew them, which is what this does — and it is the right
+      // answer for the art direction anyway: Wave Race water carries banded
+      // colour and no interior ink at all.
+      u.tNormalDepth.value = this.depthCopy.texture;
+      u.tPostND.value = this.main.textures[1];
       (u.uTexel.value as Vector2).copy(texel);
       // Keep the line one device pixel wide no matter the pixel ratio, so the
       // ink weight matches the inverted-hull lines at every resolution.
@@ -468,6 +505,7 @@ layout(location = 0) out vec4 outColor;
 
 uniform sampler2D tColor;
 uniform sampler2D tNormalDepth;
+uniform sampler2D tPostND;
 uniform vec2 uTexel;
 uniform float uNormalThreshold;
 uniform float uDepthThreshold;
@@ -526,7 +564,20 @@ void main() {
   vec4 c  = texture(tNormalDepth, vUv);
 
   // Sky, ink and anything else that opted out has a zero normal; never line it.
+  // On the pre-ocean buffer, open water reads as the sky's opt-out and lands
+  // here, which is the whole point.
   if (optedOut(c)) {
+    outColor = uLineMask > 0.5 ? vec4(1.0) : texture(tColor, vUv);
+    return;
+  }
+
+  // Drowned pixels. The pre-ocean buffer still holds the submerged part of a
+  // hull, so without this the crease lines of a boat would keep drawing straight
+  // through the water in front of them. The relative tolerance matters: at 90 m
+  // an absolute epsilon either lets the whole ocean through or eats the lines on
+  // anything that is merely close to the waterline.
+  float post = texture(tPostND, vUv).w;
+  if (post < c.w * 0.985) {
     outColor = uLineMask > 0.5 ? vec4(1.0) : texture(tColor, vUv);
     return;
   }

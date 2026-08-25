@@ -15,6 +15,14 @@
 
 const free = (position, target) => ({ mode: 'free', position, target });
 
+// The outline-width rig's eye point and sighting, duplicated from ProbeScene's
+// ROW_EYE / ROW_ELEV_DEG / ROW_STATIONS. The shot file is plain ESM loaded by
+// node and cannot import a .ts module, so these are copied rather than shared —
+// if the rig moves in ProbeScene.ts, move them here in the same edit or the
+// measurement silently stops being a measurement.
+const ROW_EYE = [-22, 3.0, 26];
+const ROW_SIGHT = [-25.83, 10.05, -13.82]; // 40 m along the row's mean bearing (-5.5 deg, +10 deg)
+
 export const SHOT_GROUPS = {
   probe: 'Cel pipeline calibration primitives',
   diag: 'Debug taps: packed normals, linear depth, isolated line mask',
@@ -33,13 +41,12 @@ export const SHOTS = [
     id: 'probe-02-distance-row',
     group: 'probe',
     time: 6.0,
-    // Sighted 6 m to the side of the lane and 5 m up, so the five spheres fan
-    // across the frame instead of stacking, and every one of them clears the
-    // swell. Sighting straight down the lane put the near sphere over the far
-    // four and made the whole measurement impossible.
-    camera: free([-13.0, 7.4, 10], [-22, 2.2, -46]),
+    // The camera IS the rig's eye point. Every sphere is placed at a fixed
+    // elevation and bearing from here, so they land on one screen row against
+    // clear sky and their ink can be measured with a single horizontal scan.
+    camera: free(ROW_EYE, ROW_SIGHT),
     setup: { setDebugView: 0 },
-    description: 'Identical spheres at 6 m to 94 m. Outline width must be constant.',
+    description: 'Identical spheres at 7 m to 94 m. Outline width must be constant.',
   },
   {
     id: 'probe-03-knot-interior',
