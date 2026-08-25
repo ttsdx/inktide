@@ -639,22 +639,107 @@ function stripeEdges(z: number): [number, number] {
   return [centre - half, centre + half];
 }
 
+/** Topside rows, chine (0) to sheer (1), with the stripe's edges as members. */
+function topsideRows(z: number): number[] {
+  const [s0, s1] = stripeEdges(z);
+  return [0, s0 * 0.5, s0, s1, s1 + (1 - s1) * 0.5, 1];
+}
+
+// --- deck parameterisation -------------------------------------------------
+// Lives up here with the hull sections rather than down with the deck builder
+// because the transom and stem caps have to close the deck as well as the hull:
+// they are single flat faces spanning the whole section, and if they stopped at
+// the sheer there would be a crescent-shaped hole under the deck edge at each
+// end of the boat.
+
+const COAMING_Y = HULL_FREEBOARD;
+/** Two centimetres under RIDER_MOUNT, so boots rest on the floor, not in it. */
+const COCKPIT_FLOOR_Y = RIDER_MOUNT.y - 0.02;
+const COCKPIT_HALF = 0.47;
+
+/**
+ * How open the cockpit is at this station, 0..1.
+ *
+ * The well is a lens rather than a rounded rectangle: the opening's half-width
+ * is this mask times COCKPIT_HALF, so the coaming rim, the well walls and the
+ * floor are all generated from the same station list as the deck and cannot
+ * crack apart. The aft ramp is longer than the forward one because the rider
+ * sits at RIDER_MOUNT.z = -0.28 and needs the room behind them.
+ */
+function cockpitOpening(z: number): number {
+  return Math.min(smooth01((z + 1.22) / 0.34), smooth01((0.52 - z) / 0.3));
+}
+
+/** Top of the rolled gunwale, just inboard of and above the sheer. */
+function gunwaleTop(st: HullStation): { x: number; y: number } {
+  return { x: st.sheerHalf - 0.05, y: st.sheerY + 0.055 };
+}
+
+/** The coaming rim this station's deck runs inboard to. */
+function cockpitRim(st: HullStation): { half: number; y: number } {
+  const lip = cockpitOpening(st.z);
+  const g = gunwaleTop(st);
+  return {
+    half: COCKPIT_HALF * lip,
+    // Outside the cockpit the "rim" is a low spine ridge down the fore and
+    // after decks; inside it climbs to HULL_FREEBOARD, which is where that
+    // number is defined to be measured.
+    y: MathUtils.lerp(g.y + 0.045, COAMING_Y, lip),
+  };
+}
+
+/** Deck columns, from the gunwale top (0) inboard to the coaming rim (1). */
+const DECK_U = [0, 0.45, 0.8, 0.91, 1];
+
+/** Half-profile of the deck at one station, gunwale top inboard to the rim. */
+function deckHalfProfile(st: HullStation): { x: number; y: number; t: Tint }[] {
+  const g = gunwaleTop(st);
+  const rim = cockpitRim(st);
+  return DECK_U.map((u) => ({
+    x: MathUtils.lerp(g.x, rim.half, u),
+    // The rise is squeezed into the last 20% of the width so the coaming is a
+    // lip you could grip, not a domed deck.
+    y: MathUtils.lerp(g.y, rim.y, smooth01((u - 0.8) / 0.2)),
+    t: u >= 0.91 ? PANEL : PAINT,
+  }));
+}
+
 // ---------------------------------------------------------------------------
 // Hull
 // ---------------------------------------------------------------------------
 
-/** Outline of one station, in the order the surface bands lay it down. */
+/**
+ * Half-section of the whole boat at one station: keel, bottom, chine, topsides,
+ * sheer, gunwale, deck, ending on the centreline at the coaming rim or spine.
+ *
+ * Both ends of the list sit on x = 0, which is what lets the caps mirror it
+ * into one closed polygon.
+ */
+function halfSection(st: HullStation): SurfacePoint[] {
+  const rows = topsideRows(st.z);
+  const half: SurfacePoint[] = BOTTOM_U.map((u) =>
+    bottomPoint(st, u, 1, u === 0 ? KEEL : WET),
+  );
+  // Row 0 of the topsides is the chine, already emitted as bottom u = 1.
+  for (let i = 1; i < rows.length; i++) half.push(topsidePoint(st, rows[i], 1, PANEL));
+  for (const d of deckHalfProfile(st)) half.push({ x: d.x, y: d.y, z: st.z, t: PANEL });
+  return half;
+}
+
+/**
+ * The full closed section outline, port sheer round to starboard, for the caps.
+ *
+ * Both centreline points appear exactly once, so the polygon is simple, and it
+ * stays star-shaped about its own centroid: the sides only ever move outward
+ * and upward and the deck arch only ever moves inward and upward, so a fan
+ * from the middle tessellates it without gaps or overlaps.
+ */
 function stationOutline(st: HullStation): SurfacePoint[] {
-  const [s0, s1] = stripeEdges(st.z);
-  const vs = [s0 * 0.5, s0, s1, s1 + (1 - s1) * 0.5, 1];
+  const half = halfSection(st);
+  const last = half.length - 1;
   const out: SurfacePoint[] = [];
-  // Port side, sheer down to the keel...
-  for (let i = vs.length - 1; i >= 0; i--) out.push(topsidePoint(st, vs[i], -1, PANEL));
-  for (let i = BOTTOM_U.length - 1; i >= 1; i--) out.push(bottomPoint(st, BOTTOM_U[i], -1, PANEL));
-  // ...through the keel, and back up the starboard side.
-  out.push(bottomPoint(st, 0, 1, KEEL));
-  for (let i = 1; i < BOTTOM_U.length; i++) out.push(bottomPoint(st, BOTTOM_U[i], 1, PANEL));
-  for (const v of vs) out.push(topsidePoint(st, v, 1, PANEL));
+  for (let i = last - 1; i >= 1; i--) out.push({ ...half[i], x: -half[i].x });
+  for (let i = 0; i <= last; i++) out.push(half[i]);
   return out;
 }
 
@@ -689,45 +774,34 @@ export function buildHullGeometry(): BufferGeometry {
 
     // Band A: chine up to the stripe. Two spans, so the near-vertical part of
     // the topside still gets a little longitudinal shape.
-    stitchGrid(
-      b,
-      STATIONS.map((st) => {
-        const [s0] = stripeEdges(st.z);
-        return [0, s0 * 0.5, s0].map((v) => topsidePoint(st, v, side, PAINT));
-      }),
-      { ref: topRef },
-    );
-
-    // Band B: the stripe itself. Two rows, one span, and because its vertices
-    // are its own, both of its edges are geometrically crisp rather than an
+    // Band B: the stripe itself, one span. Because its two rows are its own
+    // vertices, both stripe edges are geometrically crisp rather than an
     // interpolated colour ramp.
-    stitchGrid(
-      b,
-      STATIONS.map((st) => {
-        const [s0, s1] = stripeEdges(st.z);
-        return [s0, s1].map((v) => topsidePoint(st, v, side, STRIPE));
-      }),
-      { ref: topRef },
-    );
-
-    // Band C: stripe to sheer. Darkens into the sheer so the gunwale highlight
-    // added by the deck has something to sit against.
-    stitchGrid(
-      b,
-      STATIONS.map((st) => {
-        const [, s1] = stripeEdges(st.z);
-        const vs = [s1, s1 + (1 - s1) * 0.5, 1];
-        return vs.map((v, k) => topsidePoint(st, v, side, k === 2 ? PANEL : PAINT));
-      }),
-      { ref: topRef },
-    );
+    // Band C: stripe to sheer, darkening into the sheer so the gunwale
+    // highlight the deck adds has something to sit against.
+    const bands: [number, number, (row: number, count: number) => Tint][] = [
+      [0, 3, () => PAINT],
+      [2, 4, () => STRIPE],
+      [3, 6, (row, count) => (row === count - 1 ? PANEL : PAINT)],
+    ];
+    for (const [first, end, tintOf] of bands) {
+      stitchGrid(
+        b,
+        STATIONS.map((st) => {
+          const rows = topsideRows(st.z).slice(first, end);
+          return rows.map((v, k) => topsidePoint(st, v, side, tintOf(k, rows.length)));
+        }),
+        { ref: topRef },
+      );
+    }
   }
 
-  // Stem and transom. Both are flat faces on their own vertices, which is what
-  // makes the transom edge the hard corner an arcade boat needs — a rounded
-  // stern loses the whole rear silhouette against the water.
-  fanCap(b, stationOutline(STATIONS[0]), _dir.set(0, 0, -1), PANEL);
-  fanCap(b, stationOutline(STATIONS[STATIONS.length - 1]), _dir.set(0, 0, 1), PANEL);
+  // Stem and transom. Both are single flat faces spanning the whole section,
+  // deck included, on their own vertices. A hard-cornered transom is what makes
+  // the stern read against the water at all — round it off and the entire rear
+  // silhouette dissolves into the wake.
+  fanCap(b, stationOutline(STATIONS[0]), _dir.set(0, 0, -1));
+  fanCap(b, stationOutline(STATIONS[STATIONS.length - 1]), _dir.set(0, 0, 1));
 
   return b.finish('hull');
 }
@@ -735,32 +809,6 @@ export function buildHullGeometry(): BufferGeometry {
 // ---------------------------------------------------------------------------
 // Deck
 // ---------------------------------------------------------------------------
-
-const COAMING_Y = HULL_FREEBOARD;
-/** Two centimetres under RIDER_MOUNT, so boots rest on the floor, not in it. */
-const COCKPIT_FLOOR_Y = RIDER_MOUNT.y - 0.02;
-const COCKPIT_HALF = 0.47;
-
-/**
- * How open the cockpit is at this station, 0..1.
- *
- * The well is a lens rather than a rounded rectangle: the opening's half-width
- * is this mask times COCKPIT_HALF, so the coaming rim, the well walls and the
- * floor are all generated from the same station list as the deck and cannot
- * crack apart. The aft ramp is longer than the forward one because the rider
- * sits at RIDER_MOUNT.z = -0.28 and needs the room behind them.
- */
-function cockpitOpening(z: number): number {
-  return Math.min(smooth01((z + 1.22) / 0.34), smooth01((0.52 - z) / 0.3));
-}
-
-/** Top of the rolled gunwale, just inboard and above the sheer. */
-function gunwaleTop(st: HullStation): { x: number; y: number } {
-  return { x: st.sheerHalf - 0.05, y: st.sheerY + 0.055 };
-}
-
-/** Deck columns from the gunwale top inboard to the coaming rim. */
-const DECK_U = [0, 0.45, 0.8, 0.91, 1];
 
 /**
  * The deck: a rolled gunwale, a flat field, a raised coaming lip, and the well.
@@ -776,6 +824,8 @@ const DECK_U = [0, 0.45, 0.8, 0.91, 1];
  */
 export function buildDeckGeometry(): BufferGeometry {
   const b = new SurfaceBuilder();
+  const deckRef = (list: readonly HullStation[]) => (i: number) =>
+    _ref.set(0, list[i].sheerY - 0.3, list[i].z);
 
   for (const side of [-1, 1]) {
     // Rolled gunwale: a 5 cm band from the sheer up to the deck edge, tinted
@@ -790,28 +840,15 @@ export function buildDeckGeometry(): BufferGeometry {
           { x: side * g.x, y: g.y, z: st.z, t: FLASH },
         ];
       }),
-      { ref: (i) => _ref.set(0, STATIONS[i].sheerY - 0.3, STATIONS[i].z) },
+      { ref: deckRef(STATIONS) },
     );
 
     stitchGrid(
       b,
-      STATIONS.map((st) => {
-        const g = gunwaleTop(st);
-        const lip = cockpitOpening(st.z);
-        const rimHalf = COCKPIT_HALF * lip;
-        // Outside the cockpit the "rim" is a low spine ridge; inside it climbs
-        // to HULL_FREEBOARD, which is where that number is defined to be.
-        const rimY = MathUtils.lerp(g.y + 0.045, COAMING_Y, lip);
-        return DECK_U.map((u) => ({
-          x: side * MathUtils.lerp(g.x, rimHalf, u),
-          // The rise is squeezed into the last 20% of the width so the coaming
-          // is a lip you could grip, not a domed deck.
-          y: MathUtils.lerp(g.y, rimY, smooth01((u - 0.8) / 0.2)),
-          z: st.z,
-          t: u >= 0.91 ? PANEL : PAINT,
-        }));
-      }),
-      { ref: (i) => _ref.set(0, STATIONS[i].sheerY - 0.3, STATIONS[i].z) },
+      STATIONS.map((st) =>
+        deckHalfProfile(st).map((p) => ({ x: side * p.x, y: p.y, z: st.z, t: p.t })),
+      ),
+      { ref: deckRef(STATIONS) },
     );
   }
 
@@ -821,19 +858,10 @@ export function buildDeckGeometry(): BufferGeometry {
   const wellStations = STATIONS.filter((st) => st.z > -1.32 && st.z < 0.74);
 
   for (const side of [-1, 1]) {
-    const rim = (st: HullStation) => {
-      const lip = cockpitOpening(st.z);
-      const g = gunwaleTop(st);
-      return {
-        half: COCKPIT_HALF * lip,
-        y: MathUtils.lerp(g.y + 0.045, COAMING_Y, lip),
-      };
-    };
-
     stitchGrid(
       b,
       wellStations.map((st) => {
-        const r = rim(st);
+        const r = cockpitRim(st);
         return [0, 0.55, 1].map((v) => ({
           x: side * r.half * MathUtils.lerp(1, 0.86, v),
           y: MathUtils.lerp(r.y, COCKPIT_FLOOR_Y, v),
@@ -848,7 +876,7 @@ export function buildDeckGeometry(): BufferGeometry {
     stitchGrid(
       b,
       wellStations.map((st) => {
-        const half = rim(st).half * 0.86;
+        const half = cockpitRim(st).half * 0.86;
         return [1, 0.5, 0].map((k) => ({
           x: side * half * k,
           y: COCKPIT_FLOOR_Y,

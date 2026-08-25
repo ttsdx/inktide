@@ -43,6 +43,23 @@ const _q = new Quaternion();
 const _sample: OceanSample = { height: 0, nx: 0, ny: 1, nz: 0, jacobian: 1 };
 const _sampleAhead: OceanSample = { height: 0, nx: 0, ny: 1, nz: 0, jacobian: 1 };
 
+/** Half-spacing of the three-tap hull filter, in metres. Roughly 0.35 x LOA. */
+const HULL_FILTER_SPAN = 1.9;
+
+/**
+ * Water surface height as the hull experiences it: a three-tap spatial average
+ * along the keel, which low-passes away waves shorter than the boat.
+ * See the long comment at the call site for why this exists.
+ */
+function filteredSurface(world: Vector3, forward: Vector3, time: number): number {
+  const fx = forward.x * HULL_FILTER_SPAN;
+  const fz = forward.z * HULL_FILTER_SPAN;
+  const centre = sampleOcean(world.x, world.z, time, _sample).height;
+  const ahead = sampleOcean(world.x + fx, world.z + fz, time, _sampleAhead).height;
+  const behind = sampleOcean(world.x - fx, world.z - fz, time, _sampleAhead).height;
+  return (centre + ahead + behind) / 3;
+}
+
 export class BoatPhysics implements BoatState {
   readonly id: number;
   readonly spec: BoatSpec;
@@ -219,8 +236,22 @@ export class BoatPhysics implements BoatState {
       const local = HULL_PROBE_POINTS[i];
       this.localToWorld(local, _probeWorld);
 
-      sampleOcean(_probeWorld.x, _probeWorld.z, time, _sample);
-      const surfaceY = _sample.height;
+      // THE HULL DOES NOT FEEL RIPPLES.
+      //
+      // Sampling the raw surface at a point makes a 5.4 m boat respond to the
+      // 8 m chop as violently as to the 112 m swell, and telemetry showed the
+      // result plainly: driving *along* the swell — the section that is meant
+      // to be the smooth contrast to the jump straight — was airborne 35% of
+      // the time, slightly more than driving across it. The airtime was coming
+      // entirely from high-frequency chop, so no amount of reducing the swell
+      // would have fixed it.
+      //
+      // A real hull bridges waves much shorter than itself. Averaging three
+      // samples spaced +/-1.9 m along the keel reproduces that: it passes the
+      // 112 m and 78 m swells essentially untouched (>99%), takes the 26.7 m
+      // wave to 94%, the 14.3 m to 80%, and the 8.15 m chop to 46%. The visual
+      // surface keeps every ripple; only the forces are filtered.
+      const surfaceY = filteredSurface(_probeWorld, this.forward, time);
       const depth = surfaceY - _probeWorld.y;
       if (depth <= 0) continue;
 
@@ -234,8 +265,7 @@ export class BoatPhysics implements BoatState {
       // fighting the lift, which stiffens the ride and pumps energy in at the
       // wrong phase. Damping against velocity *relative to the water* is what
       // makes the boat ride the swell instead of arguing with it.
-      sampleOcean(_probeWorld.x, _probeWorld.z, time + 0.02, _sampleAhead);
-      const waterVy = (_sampleAhead.height - surfaceY) * 50;
+      const waterVy = (filteredSurface(_probeWorld, this.forward, time + 0.02) - surfaceY) * 50;
 
       // Velocity of this probe = hull velocity + rotational contribution. The
       // rotational term is what damps pitch/roll oscillation rather than just
@@ -252,13 +282,24 @@ export class BoatPhysics implements BoatState {
       // 0.85 m against a stiffness of 14.5, so a probe buried by a crest
       // generated twelve times the boat's weight in lift and fired it 13 m into
       // the air. Real buoyancy is bounded by displaced volume; so is this.
-      const effDepth = Math.min(depth, 0.30);
+      const effDepth = Math.min(depth, 0.55);
 
       // Stiffness is expressed per unit of the boat's own weight, so heavy and
-      // light hulls float at the same waterline. k = 1/restDepth: 8.3 settles
-      // the design waterline about 12 cm up the probe.
-      const buoyForce = effDepth * 8.3 * GRAVITY * this.spec.mass * weight;
-      const dampForce = -probeVy * 3.6 * this.spec.mass * weight;
+      // light hulls float at the same waterline. k = 1/restDepth.
+      //
+      // 3.2 rather than the 8.3 this started at, because the boat has to float
+      // DEEP. A stiff spring settles the keel only 12 cm under, and once
+      // planing lift carries most of the weight that drops to under 2 cm — at
+      // which point any ripple frees the hull and the boat reads as airborne
+      // 40% of a race no matter how small the waves are. Telemetry made this
+      // unmistakable: reducing the swell all the way down to Hs 2.9 m barely
+      // moved the number, because the swell was never the cause. Floating deep
+      // gives the hull margin to be lifted through without leaving the water.
+      const buoyForce = effDepth * 3.2 * GRAVITY * this.spec.mass * weight;
+      // With k = 3.2 the heave mode sits at 5.6 rad/s, so 4.5 is ~40% of
+      // critical: lively enough to ride the swell, damped enough to settle
+      // between waves instead of trampolining.
+      const dampForce = -probeVy * 4.5 * this.spec.mass * weight;
       const totalUp = Math.max(0, buoyForce + dampForce);
 
       _force.y += totalUp;
@@ -282,10 +323,13 @@ export class BoatPhysics implements BoatState {
     // wallowing at low speed and skating at pace is a large part of "weighty".
     if (submergedWeight > 0) {
       const planingSpeed = MathUtils.clamp((this.forwardSpeed - 6) / 18, 0, 1);
-      // Capped below the boat's own weight. Planing lift makes a hull ride
+      // Capped well below the boat's own weight. Planing lift makes a hull ride
       // *higher in the water*; it is not a wing. At 5.6x weight the boat simply
-      // flew, and every jump measurement was meaningless.
-      const lift = planingSpeed * planingSpeed * 0.85 * GRAVITY * this.spec.mass * submergedWeight;
+      // flew. Even at 0.85x it carried so much of the weight that the hull sat
+      // almost on the surface and skipped off every ripple, so it is held at
+      // half: enough that the boat visibly rises and loosens as it comes up on
+      // the plane, not enough to lift the keel out.
+      const lift = planingSpeed * planingSpeed * 0.5 * GRAVITY * this.spec.mass * submergedWeight;
       _force.y += lift;
       // Planing lifts the bow: the pressure centre moves aft as she climbs.
       pitchTorque += lift * 0.42;

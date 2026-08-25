@@ -822,12 +822,6 @@ void main() {
   // adding means foam needs a genuine fold AND a genuine crest, which is also
   // the physical condition for a wave to actually break.
   // -----------------------------------------------------------------------
-  // Apply the pre-filter to the painted body before any foam goes on top.
-  // Foam is excluded on purpose: white on blue survives averaging perfectly
-  // well, and the far field needs its crest highlights to keep a silhouette.
-  vec3 flatTone = mix(uMid, uShallow, 0.55);
-  col = mix(flatTone, col, mix(0.28, 1.0, resolve));
-
   float fn = foamNoise(p, uTime);
   float crestSignal = vFold * crestGate;
 
@@ -933,6 +927,19 @@ void main() {
 
   col = mix(col, uCrest * 1.15, clamp(foamHalo - foamEdge, 0.0, 1.0) * 0.75);
   col = mix(col, foamCol, foamEdge);
+
+  // Apply the pre-filter now, after the foam, and aim it at a target that
+  // knows how much foam is here.
+  //
+  // Running it before the foam left the foam itself unfiltered, so a wake seen
+  // at a grazing angle still alternated white and blue faster than a pixel and
+  // still resolved to grey — a dirty wedge across the bottom right of the
+  // spray capture. Folding the foam into the target instead means heavily
+  // foamed water flattens towards pale foam and clear water flattens towards
+  // saturated blue, and neither of them flattens towards the average of the
+  // two, which is the only colour on that line nobody wants.
+  vec3 flatTone = mix(mix(uMid, uShallow, 0.55), uFoamShade, clamp(foamSignal * 1.3, 0.0, 1.0));
+  col = mix(flatTone, col, mix(0.28, 1.0, resolve));
 
   // -----------------------------------------------------------------------
   // 10. GLITTER

@@ -11,10 +11,14 @@ import { LAYER_OPAQUE, LAYER_OVERLAY, LAYER_SKY } from './render/layers.ts';
 import { ProbeScene } from './dev/ProbeScene.ts';
 import { Course } from './race/Course.ts';
 import { RacingLine } from './race/RacingLine.ts';
+import { RaceDirector, type RaceEvent } from './race/RaceDirector.ts';
+import { AIController, AI_PRESETS } from './race/AIController.ts';
+import { GateField } from './entities/Gate.ts';
+import { BuoyField } from './entities/Buoy.ts';
 import { BoatPhysics } from './entities/BoatPhysics.ts';
 import { BOAT_SPECS, HULL_BEAM, RIDER_MOUNT } from './entities/hullSpec.ts';
 import { Rider } from './entities/Rider.ts';
-import type { BoatCommand, RiderPose } from './contracts.ts';
+import type { BoatCommand, BoatState, RiderPose } from './contracts.ts';
 
 /**
  * Top-level game object. Owns the engine, the world and the race, and is the
@@ -33,6 +37,10 @@ interface Racer {
   mount: Object3D;
   pose: RiderPose;
   command: BoatCommand;
+  /** Null for the player. */
+  ai: AIController | null;
+  /** 0..1 celebration blend, ramps in once this racer has finished. */
+  celebrate: number;
 }
 
 export class Game {
@@ -47,6 +55,9 @@ export class Game {
 
   course: Course | null = null;
   racingLine: RacingLine | null = null;
+  gates: GateField | null = null;
+  buoys: BuoyField | null = null;
+  director: RaceDirector | null = null;
 
   readonly racers: Racer[] = [];
   /** Scene root for everything race-related, so it can be rebuilt on restart. */
@@ -59,6 +70,7 @@ export class Game {
   /** Reusable buffers so the per-frame wiring does not allocate. */
   private readonly emitters: WakeEmitter[] = [];
   private readonly contacts: HullContact[] = [];
+  private readonly states: BoatState[] = [];
   private readonly chase: ChaseTarget = {
     position: new Vector3(),
     forward: new Vector3(0, 0, 1),
@@ -111,8 +123,20 @@ export class Game {
     this.racingLine.mesh.traverse((o) => o.layers.set(LAYER_OVERLAY));
     this.raceRoot.add(this.racingLine.mesh);
 
+    this.gates = new GateField(this.course);
+    this.gates.root.traverse((o) => o.layers.set(LAYER_OPAQUE));
+    this.raceRoot.add(this.gates.root);
+
+    this.buoys = new BuoyField(this.course);
+    this.buoys.root.traverse((o) => o.layers.set(LAYER_OPAQUE));
+    this.raceRoot.add(this.buoys.root);
+
     // --- racers ------------------------------------------------------------
     this.buildRacers();
+
+    this.director = new RaceDirector(this.course, this.racers.length);
+    this.director.onEvent = this.onRaceEvent;
+    this.director.start();
 
     if (url.searchParams.get('probe') === '1') {
       this.probe = new ProbeScene();
@@ -153,15 +177,44 @@ export class Game {
       rider.root.traverse((o) => o.layers.set(LAYER_OPAQUE));
       mount.add(rider.root);
 
+      // Personalities are assigned in a fixed order so a race is reproducible
+      // for the screenshot harness; the PRNG inside each controller is seeded
+      // from the boat id for the same reason.
+      const ai = i === 0 ? null : new AIController(i, course, AI_PRESETS[i % AI_PRESETS.length]);
+
       this.racers.push({
         physics,
         rider,
         mount: hull,
         pose: Rider.restPose(),
         command: { throttle: 0, brake: 0, steer: 0, drift: false },
+        ai,
+        celebrate: 0,
       });
     }
   }
+
+  private readonly onRaceEvent = (e: RaceEvent): void => {
+    switch (e.type) {
+      case 'countdown':
+        if (e.value === 0) this.effects.flash(new Color(0x39ff9c), 0.18);
+        break;
+      case 'gate':
+        this.gates?.flashPassed(e.checkpoint);
+        break;
+      case 'lap':
+        if (e.boatId === 0) this.effects.flash(new Color(0x8ff4ff), 0.12);
+        break;
+      case 'finish':
+        if (e.boatId === 0) {
+          this.effects.flash(new Color(0xffffff), 0.28);
+          this.rig.mode = 'results';
+        }
+        break;
+      default:
+        break;
+    }
+  };
 
   start(): void {
     if (this.started) return;
@@ -199,19 +252,33 @@ export class Game {
     const ctx = { dt, elapsed, frame: this.engine.frame };
 
     // --- drive ---------------------------------------------------------------
+    const director = this.director;
+    const phase = director?.phase ?? 'racing';
+    // Throttle is locked out until the lights go green. Steering is not: being
+    // able to line the boat up on the grid while the countdown runs is what
+    // stops the start feeling like a cutscene you are watching.
+    const launched = phase === 'racing' || phase === 'finished' || phase === 'results';
+
+    this.states.length = 0;
+    for (const r of this.racers) this.states.push(r.physics);
+
     for (let i = 0; i < this.racers.length; i++) {
       const r = this.racers[i];
       if (i === 0) {
-        r.command.throttle = control.throttle;
-        r.command.brake = control.brake;
+        r.command.throttle = launched ? control.throttle : 0;
+        r.command.brake = launched ? control.brake : 0;
         r.command.steer = control.steer;
-        r.command.drift = control.drift;
-      } else {
-        // Placeholder until the AI controllers land: hold station on the grid.
-        r.command.throttle = 0;
-        r.command.brake = 0;
-        r.command.steer = 0;
-        r.command.drift = false;
+        r.command.drift = launched && control.drift;
+      } else if (r.ai && director) {
+        const prog = director.get(i);
+        const playerProg = director.get(0);
+        if (prog && playerProg) {
+          const cmd = r.ai.update(r.physics, this.states, prog, playerProg, ctx);
+          r.command.throttle = launched ? cmd.throttle : 0;
+          r.command.brake = launched ? cmd.brake : 0;
+          r.command.steer = cmd.steer;
+          r.command.drift = launched && cmd.drift;
+        }
       }
       r.physics.update(r.command, ctx, i === 0 ? this.effects : null);
     }
@@ -223,17 +290,27 @@ export class Game {
       }
     }
 
+    // --- race logic ----------------------------------------------------------
+    director?.update(this.states, ctx);
+
     // --- visuals -------------------------------------------------------------
     this.emitters.length = 0;
     this.contacts.length = 0;
 
-    for (const r of this.racers) {
+    for (let i = 0; i < this.racers.length; i++) {
+      const r = this.racers[i];
       const s = r.physics;
 
       r.mount.position.copy(s.position);
       s.getQuaternion(r.mount.quaternion);
 
-      r.pose = Rider.poseFromBoat(s, r.pose, dt, 0);
+      // Celebration ramps in over a second once a racer is done, so the pose
+      // change reads as a reaction rather than a state flip.
+      const finished = director?.get(i)?.finished ?? false;
+      const target = finished ? 1 : 0;
+      r.celebrate += (target - r.celebrate) * Math.min(1, 1.6 * dt);
+
+      r.pose = Rider.poseFromBoat(s, r.pose, dt, r.celebrate);
       r.rider.update(r.pose, ctx);
 
       if (!s.airborne) {
@@ -277,6 +354,16 @@ export class Game {
     this.probe?.update(elapsed);
     this.sky.update(cam, elapsed);
     this.ocean.update(cam, elapsed);
+
+    if (this.gates) {
+      const next = director?.get(0)?.nextCheckpoint;
+      if (next !== undefined) this.gates.setActiveIndex(next);
+      this.gates.update(ctx);
+    }
+    if (this.buoys) {
+      this.buoys.setFocus(focus);
+      this.buoys.update(ctx);
+    }
 
     if (this.racingLine && this.course && this.player) {
       this.racingLine.update(elapsed, cam.position);

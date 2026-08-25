@@ -507,12 +507,18 @@ void main() {
     return;
   }
 
+  // The weights are the spread *rate*, and they compound. A kernel that looks
+  // conservative for one frame is not: at 60 Hz over an eight second lifetime
+  // it is applied five hundred times, and the foam performs a random walk with
+  // a standard deviation of the square root of that. The first version put 48%
+  // of the weight off-centre, which spread a three-metre ribbon into a fifteen
+  // metre blob — the wake stopped being a wake and became weather.
   vec2 o = uTexel * uSpread;
-  vec4 c = texture(uPrev, uv) * 0.52;
-  c += texture(uPrev, uv + vec2(o.x, 0.0)) * 0.12;
-  c += texture(uPrev, uv - vec2(o.x, 0.0)) * 0.12;
-  c += texture(uPrev, uv + vec2(0.0, o.y)) * 0.12;
-  c += texture(uPrev, uv - vec2(0.0, o.y)) * 0.12;
+  vec4 c = texture(uPrev, uv) * 0.88;
+  c += texture(uPrev, uv + vec2(o.x, 0.0)) * 0.03;
+  c += texture(uPrev, uv - vec2(o.x, 0.0)) * 0.03;
+  c += texture(uPrev, uv + vec2(0.0, o.y)) * 0.03;
+  c += texture(uPrev, uv - vec2(0.0, o.y)) * 0.03;
 
   outColor = vec4(c.r * uShift.z, c.g * uShift.w, 0.0, 1.0);
 }
@@ -554,8 +560,8 @@ void main() {
   // Footprint. The bow lobes reach sideways as the boat goes faster and the
   // stern churn reaches back; both are clamped so a stationary boat still
   // stamps something and a flat-out one does not blow the quad up.
-  float halfAcross = isSplash > 0.5 ? width : (width * 1.9 + 3.2 + speed01 * 5.0);
-  float halfAlong = isSplash > 0.5 ? width : (width * 2.2 + 5.0 + speed01 * 9.0);
+  float halfAcross = isSplash > 0.5 ? width : (width * 1.5 + 1.8 + speed01 * 2.6);
+  float halfAlong = isSplash > 0.5 ? width : (width * 1.8 + 3.2 + speed01 * 5.0);
 
   vec2 local = vec2(position.x * 2.0 * halfAcross, position.y * 2.0 * halfAlong);
   vLocal = local;
@@ -648,13 +654,22 @@ void main() {
   // like the boat is being pushed by it.
   float forwardKill = 1.0 - smoothstep(width * 0.2, width * 0.9, max(along, 0.0));
 
-  // Break the deposit up so the ribbon has grain from the moment it is laid
-  // rather than only acquiring it from the blur.
-  float grain = 0.72 + 0.56 * hash21(floor(vLocal * 3.0) + floor(uTime * 24.0));
+  // A light grain, no more. The torn edge of the finished wake is cut by the
+  // ocean shader against its own foam noise, and putting a second, unrelated
+  // noise in here as well only fights it — the first attempt stamped hard
+  // 30 cm blocks and the ribbon came back looking crocheted.
+  float grain = 0.88 + 0.24 * hash21(floor(vLocal * 1.4) + floor(uTime * 6.0));
 
   float amount = (arm * 1.15 + churn * 0.95) * strength * forwardKill * grain;
-  // Deposit rate, not deposit: 60 Hz and 30 Hz must lay the same ribbon.
-  amount *= dt * 26.0;
+
+  // Deposit RATE, not deposit, so 60 Hz and 30 Hz lay the same ribbon. The
+  // rate rises with speed for a reason that is easy to get wrong: a patch of
+  // water sits under the stern for (churn length / speed) seconds, so a fixed
+  // rate would make a slow boat lay a far denser ribbon than a fast one. Rate
+  // proportional to speed cancels the dwell time and leaves the density of the
+  // ribbon constant, which is what a wake actually looks like. The constant
+  // term is what stops a drifting boat from laying nothing at all.
+  amount *= dt * (1.0 + speed01 * 4.0);
 
   if (amount <= 0.0) discard;
   outColor = vec4(amount, amount * 1.25, 0.0, 1.0);

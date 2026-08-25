@@ -33,9 +33,11 @@ export const SHOTS = [
     id: 'probe-02-distance-row',
     group: 'probe',
     time: 6.0,
-    // Sighted straight down the row's lane so all five spheres are unoccluded
-    // and the near and far outline widths can be compared in one frame.
-    camera: free([-20.0, 4.2, 12], [-22, 2.2, -70]),
+    // Sighted 6 m to the side of the lane and 5 m up, so the five spheres fan
+    // across the frame instead of stacking, and every one of them clears the
+    // swell. Sighting straight down the lane put the near sphere over the far
+    // four and made the whole measurement impossible.
+    camera: free([-13.0, 7.4, 10], [-22, 2.2, -46]),
     setup: { setDebugView: 0 },
     description: 'Identical spheres at 6 m to 94 m. Outline width must be constant.',
   },

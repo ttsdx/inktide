@@ -162,10 +162,11 @@ export class CelPipeline {
         tNormalDepth: { value: null },
         uTexel: { value: new Vector2() },
         // A Sobel over unit normals maxes out near 5.7 (a 180-degree flip across
-        // the kernel). 1.05 is roughly a 30-degree bend across three pixels:
-        // above it and the ocean's ripple normals draw a line on every crest,
-        // below it and the join between a deck and a cockpit is missed.
-        uNormalThreshold: { value: 1.05 },
+        // the kernel). An icosahedron's 41-degree facet edge measures about 2.8
+        // and a deck-to-bulkhead corner about 5.6, while the ocean's remaining
+        // ripple detail — it writes a normal already flattened 75% towards up —
+        // peaks around 1.4. 1.7 sits in that gap.
+        uNormalThreshold: { value: 1.7 },
         // Relative depth *curvature* per pixel. A crease where one surface
         // passes in front of another gives a step of order (gap / distance); a
         // smooth surface, however steeply it is sloped, gives near zero.
@@ -191,7 +192,12 @@ export class CelPipeline {
 
     this.brightPass = new FullScreenPass(
       BRIGHT_FRAG,
-      { tColor: { value: null }, uThreshold: { value: 0.86 }, uKnee: { value: 0.28 } },
+      // The threshold sits above 1 on purpose. Attachment 0 is half-float and
+      // holds pre-tonemap values: a lit saturated paint reaches ~1.4 all by
+      // itself, so a sub-1 threshold blooms every lit surface in the frame and
+      // every silhouette grows a halo. Only foam, sparks and gate glow should
+      // be over 1.15.
+      { tColor: { value: null }, uThreshold: { value: 1.15 }, uKnee: { value: 0.3 } },
       'BrightExtract',
     );
 
@@ -207,9 +213,9 @@ export class CelPipeline {
         tColor: { value: null },
         tBloom: { value: null },
         uBloomStrength: { value: BLOOM_STRENGTH },
-        uVignette: { value: 0.2 },
-        uSaturation: { value: 1.14 },
-        uContrast: { value: 1.06 },
+        uVignette: { value: 0.18 },
+        uSaturation: { value: 1.22 },
+        uContrast: { value: 1.12 },
         uExposure: { value: 1.0 },
         uTexel: { value: new Vector2() },
         uTime: { value: 0 },
@@ -524,6 +530,16 @@ void main() {
   float nLine = smoothstep(uNormalThreshold, uNormalThreshold * 1.9, normalEdge);
   float dLine = smoothstep(uDepthThreshold, uDepthThreshold * 2.2, relDepth);
 
+  // A curved surface's normal gradient is UNBOUNDED at its own silhouette: as
+  // the surface turns away, dN/dpixel goes to infinity. So the normal term draws
+  // a line just inside every rounded object however carefully the ink is
+  // flagged, and that — not the ink band — was the actual source of the doubled
+  // silhouettes. Fade the term out where the view normal has gone edge-on,
+  // because those pixels are a silhouette by definition and the hull shell has
+  // already inked them.
+  float faceOn = abs(decodeNormal(c).z);
+  nLine *= smoothstep(0.04, 0.22, faceOn);
+
   // A relative step this large is a silhouette, not a crease.
   float silhouette = smoothstep(uSilhouetteReject, uSilhouetteReject * 1.8, relDepth);
   float line = max(nLine, dLine) * (1.0 - silhouette);
@@ -644,18 +660,34 @@ void main() {
     c += texture(tBloom, vUv).rgb * uBloomStrength;
   }
 
-  // Luminance-only Reinhard: keeps hue and saturation intact in the highlights.
+  // Luminance-only Reinhard. The shoulder is deliberately shallow (0.22, down
+  // from an initial 0.42): a strong shoulder pulls a saturated paint's bright
+  // channel down along with the rest and the whole frame drifts towards pastel,
+  // which is the single most common way a cel look dies. At 0.22 anything under
+  // about 1.6 passes through nearly untouched and only genuine over-range —
+  // foam, sparks, gate glow — gets rolled off.
   float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
-  float lm = l / (1.0 + l * 0.42);
+  float lm = l / (1.0 + l * 0.22);
   c *= lm / max(l, 0.0001);
 
-  // Grade
   float g = dot(c, vec3(0.2126, 0.7152, 0.0722));
+
+  // Split tone before saturation, so the tint rides on the paint rather than
+  // being amplified by it. Shadows carry ink-blue and highlights carry paper
+  // warmth — the two-ink separation a printed cel has and a lit render does not.
+  c = mix(c, c * PAPER, smoothstep(0.55, 1.0, g) * 0.16);
+  c = mix(c, c * (INK * 2.0 + 0.55), (1.0 - smoothstep(0.0, 0.32, g)) * 0.5);
+
   c = mix(vec3(g), c, uSaturation);
-  c = (c - 0.5) * uContrast + 0.5;
+  // Contrast pivoted at 0.42 rather than 0.5. Pivoting at mid-grey crushes the
+  // shadow bands of the ramp into each other, and the shadow bands are the
+  // whole reason the ramp has four steps instead of two.
+  c = (c - 0.42) * uContrast + 0.42;
 
   // Paper-tinted vignette: darkens towards ink at the corners rather than
-  // towards black, which keeps the frame feeling printed.
+  // towards black, which keeps the frame feeling printed. Kept weak — the first
+  // guess of 0.34 was mixing 40% ink into the corners, which read as a lens
+  // effect on a frame that is meant to read as a printed page.
   vec2 q = vUv - 0.5;
   float vig = 1.0 - dot(q, q) * uVignette * 2.4;
   c = mix(INK * 0.75, c, clamp(vig, 0.0, 1.0));

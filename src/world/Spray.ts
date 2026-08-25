@@ -430,17 +430,20 @@ void main() {
   // weight — which is the whole premise of the ink in this project.
   float aa = max(fwidth(r), 0.0025);
   float body = 1.0 - smoothstep(edge - aa, edge + aa, r);
-  float rim = 1.0 - smoothstep(edge * 0.74 - aa, edge * 0.74 + aa, r);
-  float inner = 1.0 - smoothstep(edge * 0.44 - aa, edge * 0.44 + aa, r);
+  // The ink contour is a *line*, not a band. At 26% of the radius — which is
+  // what the first version drew — a droplet is more outline than droplet, and
+  // the capture came back as a scatter of dark grey pebbles instead of white
+  // water. Ink is the last 10%, and everything inside it is foam.
+  float rim = 1.0 - smoothstep(edge * 0.90 - aa, edge * 0.90 + aa, r);
 
   if (body <= 0.0) discard;
 
-  // Three tones: an ink contour around the silhouette, the shaded body, and a
-  // bright core offset upwards so every droplet is lit from the same side.
-  vec3 col = mix(uInk, uFoamShade, rim);
-  float coreOffset = 1.0 - smoothstep(edge * 0.44 - aa, edge * 0.44 + aa,
-                                      length(vQuad - vec2(-0.16, 0.20)));
-  col = mix(col, uFoam * vTint, max(inner * 0.5, coreOffset));
+  vec3 col = mix(uInk, uFoam * vTint, rim);
+  // One shaded crescent on the away side, offset rather than concentric, so
+  // every droplet in a burst is lit from the same direction as the sun.
+  float shade = smoothstep(edge * 0.52 - aa, edge * 0.52 + aa,
+                           length(vQuad - vec2(-0.30, 0.34)));
+  col = mix(col, uFoamShade, shade * rim * 0.65);
 
   // Opacity steps through three values and holds. A smooth fade is what makes
   // a particle read as a particle; a drawn droplet is either there or it is

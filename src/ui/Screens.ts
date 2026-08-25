@@ -157,24 +157,26 @@ const SHEET = `
   padding: 0 8px 8px; border-bottom: 3px solid ${CSS.inkSoft};
   transform: skewX(-8deg);
 }
-.it-th.it-num, .it-td.it-num { text-align: right; font-variant-numeric: tabular-nums; }
+.it-th.it-num { text-align: right; }
 
-.it-row { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; }
+/* Subgrid so every row inherits the header's column widths without repeating
+   them, which is the one thing the table layout genuinely needs from CSS. */
+.it-row {
+  display: grid; grid-column: 1 / -1; grid-template-columns: subgrid;
+  animation: it-slide 340ms cubic-bezier(.2,.9,.2,1) both;
+}
 .it-cell {
   display: flex; align-items: center; padding: 9px 8px;
   background: rgba(22,41,74,0.55); font-size: 16px; letter-spacing: 0.1em;
   transform: skewX(-8deg);
 }
-.it-cell.it-num { justify-content: flex-end; letter-spacing: 0.04em; }
+.it-cell.it-num { justify-content: flex-end; letter-spacing: 0.04em; font-variant-numeric: tabular-nums; }
 .it-cell:first-child { clip-path: polygon(12px 0, 100% 0, 100% 100%, 0 100%, 0 12px); }
 .it-cell:last-child { clip-path: polygon(0 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%); }
 .it-row.it-player .it-cell { background: rgba(143,244,255,0.16); color: ${CSS.foam}; }
 .it-row.it-dnf .it-cell { opacity: 0.55; }
-.it-row { animation: it-slide 340ms cubic-bezier(.2,.9,.2,1) both; }
 
-.it-place {
-  font-size: 22px; -webkit-text-stroke: 0; text-shadow: 2px 2px 0 ${CSS.ink};
-}
+.it-place { font-size: 22px; text-shadow: 2px 2px 0 ${CSS.ink}; }
 .it-chip {
   width: 12px; height: 22px; margin-right: 10px; border: 2px solid ${CSS.ink};
   transform: skewX(-16deg); flex: 0 0 auto;
@@ -195,7 +197,8 @@ const SHEET = `
 .it-btn:hover { background: ${CSS.foam}; transform: skewX(-10deg) translate(-2px, -2px); box-shadow: 9px 9px 0 ${CSS.ink}; }
 .it-btn:active { transform: skewX(-10deg) translate(3px, 3px); box-shadow: 2px 2px 0 ${CSS.ink}; }
 .it-btn.it-alt { background: ${CSS.amber}; }
-.it-hint { font-size: 12px; letter-spacing: 0.24em; color: ${CSS.cyan}; opacity: 0.8; transform: skewX(-8deg); }
+/* Also a vector caption; the slant is already baked into the glyphs. */
+.it-hint { opacity: 0.85; }
 
 @keyframes it-fade { from { opacity: 0; } to { opacity: 0.94; } }
 @keyframes it-fade-light { from { opacity: 0; } to { opacity: 0.72; } }

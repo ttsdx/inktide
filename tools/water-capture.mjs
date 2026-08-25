@@ -162,7 +162,7 @@ async function installWaterRig() {
 
   let lastBurst = 0;
 
-  game.engine.onUpdate((dt, elapsed) => {
+  const tick = (dt, elapsed) => {
     const { fx, fz } = driveBoat(elapsed, dt);
 
     const e = emitters[0];
@@ -222,9 +222,39 @@ async function installWaterRig() {
         life: 1.15,
       });
     }
-  });
+  };
 
-  window.__WATER_RIG__ = { wake, spray, state };
+  game.engine.onUpdate(tick);
+
+  /**
+   * Fast-forward the rig without rendering the scene.
+   *
+   * Game.harness.step(n, dt, false) cannot be used here. It calls Game's own
+   * update directly and never touches engine.onUpdate, so the rig would not
+   * advance at all — which is exactly the bug that made the first wake capture
+   * look like a stationary boat pumping foam into one texel, because that is
+   * precisely what it was.
+   *
+   * The wake field has memory, so its GPU passes genuinely have to run for
+   * every step; only the *scene* render can be skipped. A coarser dt is safe
+   * because both the decay and the deposit are rates scaled by dt, so the
+   * field converges to the same place for a quarter of the fill cost.
+   */
+  window.__WATER_RIG__ = {
+    wake,
+    spray,
+    state,
+    step(seconds, dt = 1 / 20) {
+      const n = Math.max(0, Math.round(seconds / dt));
+      for (let i = 0; i < n; i++) {
+        game.engine.elapsed += dt;
+        game.engine.frame++;
+        tick(dt, game.engine.elapsed);
+      }
+      game.ocean.update(game.engine.camera, game.engine.elapsed);
+    },
+    time: () => game.engine.elapsed,
+  };
 }
 
 async function main() {
@@ -295,13 +325,7 @@ async function main() {
     try {
       if (!booted || shot.time < lastTime) await boot();
 
-      // The wake field is a simulation with memory, so unlike the main shot
-      // list these cannot be fast-forwarded without rendering: skipping the
-      // GPU passes would skip the wake itself. Game.simulateOnly still runs
-      // every registered update hook, which is exactly what the field needs,
-      // so stepping without rendering the *scene* is fine and much cheaper.
-      const steps = Math.round((shot.time - lastTime) * 60);
-      await page.evaluate((n) => window.__INKTIDE__.harness.step(n, 1 / 60, false), steps);
+      await page.evaluate((s) => window.__WATER_RIG__.step(s), shot.time - lastTime);
       lastTime = shot.time;
 
       await page.evaluate((cam) => {

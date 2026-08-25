@@ -147,6 +147,16 @@ export function makeCelRamp(tint: Color = new Color(1, 1, 1)): DataTexture {
 // ---------------------------------------------------------------------------
 
 /**
+ * The matcap value that means "leave this surface alone".
+ *
+ * `celShade` consumes the matcap as a signed value modulation around this
+ * number, so it has to match what `makeCelMatcap` paints outside its disc or
+ * every surface in the game is uniformly darkened or brightened by the
+ * reflection instead of being modulated by it. Linear light.
+ */
+export const CEL_MATCAP_NEUTRAL = 0.5;
+
+/**
  * Paint the fake environment reflection on a 2D canvas: hard-edged value steps
  * from a bright sky above to a dark water bounce below, plus one crisp
  * highlight wedge. Quantised into flat regions rather than rendered as a smooth
@@ -168,10 +178,10 @@ export function makeCelMatcap(size = 256): CanvasTexture {
   const g = cv.getContext('2d')!;
   const r = size / 2;
 
-  // Outside the disc is mid-grey, not black: `vn.xy * 0.48` can land a fragment
-  // in the last texel before the edge, and a black fringe there reads as a
-  // second, wrong-coloured outline just inside the ink.
-  g.fillStyle = '#6a6a6a';
+  // Outside the disc is the neutral value, not black: `vn.xy * 0.48` can land a
+  // fragment in the last texel before the edge, and a dark fringe there reads as
+  // a second, wrong-coloured outline just inside the ink.
+  g.fillStyle = css(new Color(CEL_MATCAP_NEUTRAL, CEL_MATCAP_NEUTRAL, CEL_MATCAP_NEUTRAL));
   g.fillRect(0, 0, size, size);
 
   g.save();
@@ -180,13 +190,19 @@ export function makeCelMatcap(size = 256): CanvasTexture {
   g.clip();
 
   // Value steps. The numbers are luminances, tinted only slightly.
+  //
+  // The range is narrow (0.72 down to 0.34, centred near the 0.5 the shader
+  // treats as neutral) and there are four steps, not six. A wide, finely
+  // stepped range put a strong ladder of horizontal, view-space band edges
+  // across every curved surface, which then competed with the ramp's diagonal,
+  // light-space band edges: two sets of hard boundaries at different angles, and
+  // the eye could read neither as the form. The reflection is a secondary read
+  // and has to be quieter than the key.
   const bands: Array<[number, Color, number]> = [
-    [0.0, PALETTE.skyHigh, 1.0],
-    [0.3, PALETTE.skyMid, 0.82],
-    [0.48, PALETTE.skyHaze, 0.66],
-    [0.55, PALETTE.waterShallow, 0.5],
-    [0.74, PALETTE.waterMid, 0.36],
-    [1.0, PALETTE.waterDeep, 0.26],
+    [0.0, PALETTE.skyHigh, 0.62],
+    [0.34, PALETTE.skyMid, 0.5],
+    [0.52, PALETTE.waterShallow, 0.36],
+    [1.0, PALETTE.waterDeep, 0.24],
   ];
   for (let i = 0; i < bands.length; i++) {
     const y0 = bands[i][0] * size;
@@ -195,21 +211,18 @@ export function makeCelMatcap(size = 256): CanvasTexture {
     g.fillRect(0, y0, size, y1 - y0 + 1);
   }
 
-  // The highlight. A wedge rather than a disc: a circle inside a circle reads
-  // as a soft dot the moment the object curves, a chord-cut shape keeps a
-  // drawn edge. Positioned up-left to agree with the sun.
-  g.fillStyle = '#ffffff';
+  // One soft sky-catch wedge up-left, agreeing with the sun. Deliberately NOT a
+  // white highlight: the shader's two banded specular shapes own the highlights,
+  // and a third and fourth blob painted into the matcap turned every sphere in
+  // the calibration frame into a bubble with four reflections in it.
+  g.fillStyle = css(desaturate(PALETTE.skyHaze, 0.14, 0.8));
   g.beginPath();
-  g.ellipse(size * 0.33, size * 0.26, size * 0.155, size * 0.1, -0.5, 0, Math.PI * 2);
-  g.fill();
-  // The anime satellite highlight, offset rather than concentric.
-  g.beginPath();
-  g.ellipse(size * 0.56, size * 0.13, size * 0.055, size * 0.035, -0.35, 0, Math.PI * 2);
+  g.ellipse(size * 0.34, size * 0.24, size * 0.2, size * 0.13, -0.5, 0, Math.PI * 2);
   g.fill();
 
   // Rim band at the silhouette edge — a fresnel baked into the reflection, so
   // even surfaces with the shader rim turned off still catch their own edge.
-  g.strokeStyle = css(desaturate(PALETTE.skyHaze, 0.18, 0.95));
+  g.strokeStyle = css(desaturate(PALETTE.skyHaze, 0.18, 0.85));
   g.lineWidth = size * 0.05;
   g.beginPath();
   g.arc(r, r, r - g.lineWidth * 0.5, 0, Math.PI * 2);
@@ -348,11 +361,24 @@ export function defaultCelRamp(): Texture {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * Linear-light colour to a CSS string.
+ *
+ * The encode is not cosmetic. Palette entries are linear (three.js converts on
+ * `setHex(..., 'srgb')`), a canvas holds sRGB bytes, and the matcap texture is
+ * tagged sRGB so the GPU decodes it again on sample. Writing the linear value
+ * straight into the byte therefore applies the decode without a matching encode
+ * and everything lands about 2.5x too dark — which is why the matcap's authored
+ * mid-grey arrived in the shader at 0.15 and the "neutral" 0.5 the value
+ * modulation is centred on could only ever darken.
+ */
 function css(c: Color, mul = 1): string {
-  const r = Math.min(255, Math.round(c.r * 255 * mul));
-  const g = Math.min(255, Math.round(c.g * 255 * mul));
-  const b = Math.min(255, Math.round(c.b * 255 * mul));
-  return `rgb(${r},${g},${b})`;
+  const enc = (v: number) => {
+    const x = Math.max(0, Math.min(1, v * mul));
+    const s = x <= 0.0031308 ? x * 12.92 : 1.055 * Math.pow(x, 1 / 2.4) - 0.055;
+    return Math.round(s * 255);
+  };
+  return `rgb(${enc(c.r)},${enc(c.g)},${enc(c.b)})`;
 }
 
 /** Pull a palette colour towards its own luminance and rescale its value. */

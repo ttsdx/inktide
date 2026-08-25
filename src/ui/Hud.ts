@@ -95,7 +95,12 @@ export interface HudData {
   /** The player's row. Located by `boatId === player.id` when omitted. */
   playerProgress?: RacerProgress | null;
   totalLaps?: number;
-  /** Seconds remaining in the countdown; <= 0 means GO. */
+  /**
+   * The countdown reading. Either seconds remaining or an integer beat index
+   * (3, 2, 1) — the HUD only takes `ceil()` of it for the glyph and times its own
+   * animation from the moment that integer changes, so both conventions look the
+   * same on screen.
+   */
   countdown?: number;
   /** Current (in-progress) lap time. Derived from progress when omitted. */
   currentLapTime?: number;
@@ -157,6 +162,8 @@ export class Hud {
   private prevPosition = 0;
   private prevLapCount = -1;
   private prevCountdownStep = -1;
+  /** Seconds since the countdown digit last changed, which drives the beat wipe. */
+  private countdownAge = 99;
   private sawCountdown = false;
   private prevBoostFull = false;
   /** Last frame's clamped delta, so sub-draws can animate without re-plumbing. */
@@ -303,12 +310,17 @@ export class Hud {
 
     // --- countdown ---------------------------------------------------------
     const cd = data.countdown ?? 0;
+    this.countdownAge += dt;
     if (data.phase === 'countdown') {
       this.sawCountdown = true;
       const step = Math.max(1, Math.ceil(cd));
       if (step !== this.prevCountdownStep) {
         this.countPunch.trigger(1);
         this.prevCountdownStep = step;
+        // Timed from here rather than from the fractional part of `countdown`,
+        // because the race director reports whole beats: there is no fraction to
+        // animate from, and this works for either convention.
+        this.countdownAge = 0;
       }
       this.goTimer = GO_HOLD + 1;
     } else if (this.sawCountdown && data.phase === 'racing') {
@@ -818,7 +830,9 @@ export class Hud {
     // Two things happen per beat: a scale punch on the glyph, and a band that
     // wipes out behind it. The band is what stops a lone huge digit from
     // floating in the middle of the screen with nothing to sit against.
-    const beat = counting ? 1 - clamp01((step - cd) / 1) : 1 - clamp01(this.goTimer / GO_HOLD);
+    const beat = counting
+      ? 1 - clamp01(this.countdownAge / 0.85)
+      : 1 - clamp01(this.goTimer / GO_HOLD);
     const punch = 1 + this.countPunch.value * 0.3;
     const cx = this.w * 0.5;
     const cy = this.h * 0.4;

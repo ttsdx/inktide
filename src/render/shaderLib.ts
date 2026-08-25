@@ -110,6 +110,8 @@ uniform float uSpecSize;
 uniform float uMatcapStrength;
 uniform float uShadeSoftness;
 uniform float uAmbientWrap;
+uniform float uSkyFill;
+uniform float uKeyFill;
 
 /** See CEL_RAMP_SCALE: the ramp's lit band is stored above 1 and rescaled here. */
 const float RAMP_SCALE = ${f(CEL_RAMP_SCALE)};
@@ -144,6 +146,23 @@ vec3 celShade(CelInput s) {
   // surface's own paint colour is multiplied back in so one ramp serves every
   // object in the game.
   vec3 diffuse = s.baseColor * ramp;
+
+  // ADDITIVE FILL. This exists because a ramp can only ever multiply, and a
+  // multiply cannot introduce a hue the paint does not already contain. On the
+  // racing red (linear 1.0, 0.027, 0.125) the red channel is already at its
+  // ceiling, so the lit and base bands differ only in channels that are near
+  // zero: three of the four bands came back from the captures reading as the
+  // same red, and the sphere's form flattened out completely.
+  //
+  // Adding sky colour where the ramp is darkest and sun colour where it is
+  // brightest gives a saturated paint a shadow that is a different COLOUR and a
+  // light that is a different COLOUR, which is what a painter does and what no
+  // amount of threshold tuning can substitute for. Both terms are deliberately
+  // concentrated at the extremes so the base band stays pure paint.
+  float rampL = clamp(luma(ramp) / RAMP_SCALE, 0.0, 1.0);
+  float shadowFill = 1.0 - smoothstep(0.10, 0.70, rampL);
+  float keyFill = smoothstep(0.78, 1.0, rampL);
+  diffuse += SKY_COLOR * shadowFill * uSkyFill + SUN_COLOR * keyFill * uKeyFill;
 
   // --- 2. banded specular ------------------------------------------------
   // Two independent highlight SHAPES, not one lobe with a hard edge.
@@ -183,6 +202,7 @@ vec3 celShade(CelInput s) {
   // the surface never asked for; on a light paint it is the only thing visible,
   // which is what put brown and navy on the near-white calibration icosahedron.
   float env = luma(matcap);
+  float envSigned = env - ${f(CEL_MATCAP_NEUTRAL)};
 
   // Applied as a *multiplier* on the shaded paint, not screened or added over
   // it. Both of those mix a neutral into the surface and cost saturation, and
@@ -191,7 +211,7 @@ vec3 celShade(CelInput s) {
   // 0.11 to 0.37 and turned a saturated violet into lavender. A multiply
   // preserves hue and chroma exactly and still delivers the value structure
   // that makes the reflection read.
-  diffuse *= 1.0 + (env - 0.5) * uMatcapStrength;
+  diffuse *= 1.0 + envSigned * uMatcapStrength;
 
   // One small additive sheen, squared so it only exists in the matcap's
   // brightest region — the painted highlight wedge. This is the part that reads
@@ -280,6 +300,10 @@ export function celUniformDefaults() {
     // a gradient.
     uShadeSoftness: { value: 0.016 },
     uAmbientWrap: { value: 0.55 },
+    /** Sky colour added into the shadow bands. See the fill note in celShade. */
+    uSkyFill: { value: 0.16 },
+    /** Sun colour added into the lit band. */
+    uKeyFill: { value: 0.13 },
     uFogNear: { value: 260 },
     uFogFar: { value: 1500 },
     uCameraNear: { value: 0.1 },
