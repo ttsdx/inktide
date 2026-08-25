@@ -322,11 +322,20 @@ export class BoatPhysics implements BoatState {
       // unmistakable: reducing the swell all the way down to Hs 2.9 m barely
       // moved the number, because the swell was never the cause. Floating deep
       // gives the hull margin to be lifted through without leaving the water.
-      const buoyForce = effDepth * 3.2 * GRAVITY * this.spec.mass * weight;
+      // 4.6 rather than 3.2: the hull was resting with its origin 7 cm BELOW
+      // the surface, so barely a third of it showed and captured frames read as
+      // a boat that had sunk with its rider standing on top. 4.6 lifts the
+      // resting waterline about 22 cm, which puts the deck clear and the
+      // sponsons at the surface where they belong. Kept well below the 8.3 this
+      // started at, because that was the value that had the hull skipping off
+      // every ripple.
+      const buoyForce = effDepth * 4.6 * GRAVITY * this.spec.mass * weight;
       // With k = 3.2 the heave mode sits at 5.6 rad/s, so 4.5 is ~40% of
       // critical: lively enough to ride the swell, damped enough to settle
       // between waves instead of trampolining.
-      const dampForce = -probeVy * 4.5 * this.spec.mass * weight;
+      // Damping tracks stiffness: omega = sqrt(k*g) = 6.7, so 5.4 keeps the
+      // same ~40% of critical the 3.2/4.5 pair had.
+      const dampForce = -probeVy * 5.4 * this.spec.mass * weight;
       const totalUp = Math.max(0, buoyForce + dampForce);
 
       _force.y += totalUp;
