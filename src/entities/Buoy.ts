@@ -290,9 +290,11 @@ export class BuoyField {
     // without changing which way the buoy leans.
     _q.multiply(_yawQuat(this.yaw[i]));
 
-    // Sit the collar just at the waterline: the float's widest ring is at y = 0
-    // in the source geometry, so drop it a few centimetres to bury the flare.
-    _pos.set(x, this.height[i] - 0.06, z);
+    // The geometry is authored with its design waterline at local y = 0, so the
+    // origin goes straight on the surface. No fudge offset: one would have to
+    // be scaled with the per-buoy size to mean the same thing, and it would
+    // only be hiding a shape problem anyway.
+    _pos.set(x, this.height[i], z);
     _scale.setScalar(this.scale[i]);
     _m.compose(_pos, _q, _scale);
     this.body.setMatrixAt(i, _m);
@@ -367,13 +369,23 @@ function buildBuoyGeometry(accent: Color): BufferGeometry {
   const collar = PALETTE.foam;
   const neck = PALETTE.inkSoft;
 
-  // [radius, y, colour]
+  // [radius, y, colour], with y = 0 being the design waterline.
+  //
+  // The widest ring sits just BELOW zero and everything above it tumbles home.
+  // The first version had the widest ring 26 cm above the waterline, which
+  // meant the collar overhung the water it was floating in: from any low angle
+  // you saw the underside of that overhang as a lit ellipse, and the buoy read
+  // as a hat resting on a sheet of blue rather than as a float cut by the
+  // surface. The height was never wrong — a calibration staff put the sampler
+  // and the shader within a centimetre of each other at this range — the shape
+  // was.
   const profile: [number, number, Color][] = [
-    [0.0, -0.42, dark],
-    [0.58, -0.24, dark],
-    [0.88, -0.04, collar],
-    [0.9, 0.26, collar],
-    [0.5, 0.4, accent],
+    [0.0, -0.62, dark],
+    [0.48, -0.44, dark],
+    [0.78, -0.2, dark],
+    [0.9, -0.02, collar],
+    [0.84, 0.16, collar],
+    [0.52, 0.34, accent],
     [0.36, 0.94, accent],
     [0.32, 1.02, neck],
     [0.24, 1.12, neck],

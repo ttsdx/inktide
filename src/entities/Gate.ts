@@ -105,13 +105,17 @@ export class Gate {
     this.group.position.copy(this.centre);
     this.group.rotation.y = Math.atan2(this.tangent.x, this.tangent.z);
 
+    // Near-white mast over a red collar: the navigational-marker reading, and
+    // the only pairing that stays legible against a frame which is otherwise
+    // entirely cyan and blue. The warm sand it started as came back olive once
+    // the ramp's shadow band and the distance haze had both been through it.
     const hullMat = new CelMaterial({
-      color: PALETTE.skyHorizon,
-      rampTint: PALETTE.foam,
-      rimColor: PALETTE.skyHaze,
+      color: PALETTE.foam,
+      rampTint: PALETTE.skyMid,
+      rimColor: PALETTE.skyHigh,
       rimStrength: 0.7,
-      specStrength: 0.55,
-      matcapStrength: 0.22,
+      specStrength: 0.5,
+      matcapStrength: 0.2,
       name: 'GatePylon',
     });
     const collarMat = new CelMaterial({
@@ -125,13 +129,18 @@ export class Gate {
     for (const side of [-1, 1]) {
       const x = side * this.halfWidth;
 
-      // Flotation collar: a squat drum sitting at the waterline. Cut low enough
-      // that the waterline foam ring from the ocean shader lands on it.
+      // Flotation collar: a squat drum at the waterline, widest at the bottom.
+      //
+      // It used to be widest at the top and sat 90 cm proud of the water, so
+      // the surface met it where it was still flaring outwards and the whole
+      // drum read as resting on the sea rather than floating in it. A float
+      // has to have its beam at or below its waterline; above the water it
+      // tumbles home. Same correction as the corridor buoys.
       const collar = new Mesh(
-        new CylinderGeometry(floatRadius, floatRadius * 0.78, 1.5, 12, 1),
+        new CylinderGeometry(floatRadius * 0.8, floatRadius, 1.4, 12, 1),
         collarMat,
       );
-      collar.position.set(x, 0.15, 0);
+      collar.position.set(x, -0.25, 0);
       this.group.add(collar);
 
       // Pylon: a tapered mast. 10 radial segments keeps the silhouette faceted,
@@ -141,7 +150,9 @@ export class Gate {
         new CylinderGeometry(floatRadius * 0.52, floatRadius * 0.30, height, 10, 1),
         hullMat,
       );
-      pylon.position.set(x, height * 0.5 + 0.6, 0);
+      // The base is buried inside the collar rather than perched on top of it:
+      // a mast that starts above its own float has a visible seam.
+      pylon.position.set(x, height * 0.5 + 0.1, 0);
       this.group.add(pylon);
 
       // Lamp on top of each pylon.
@@ -166,9 +177,21 @@ export class Gate {
     // the only large object in the game that is neither sky nor water, so a
     // warm tone both fixes the weight problem and turns gates into legible
     // landmarks against an otherwise entirely blue frame.
+    //
+    // The arch is also the one object in the game that is routinely seen from
+    // directly underneath, from a boat passing through it, and the underside
+    // faces away from the only light there is. At the shipped ambient wrap the
+    // ramp bottoms out there and a captured frame had the largest object in it
+    // rendering as a black slab across the top of the screen. A high wrap
+    // lifts the shadow bands so the underside reads as amber in shade rather
+    // than as a hole, and a strong sky rim gives its lower edges the bounce
+    // they would really pick up off the water.
     const archMat = new CelMaterial({
       color: PALETTE.uiAmber,
       rampTint: PALETTE.skyHorizon,
+      ambientWrap: 0.86,
+      rimColor: PALETTE.skyHaze,
+      rimStrength: 0.85,
       specStrength: 0.5,
       matcapStrength: 0.2,
       name: 'GateArch',
