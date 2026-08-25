@@ -218,7 +218,7 @@ async function main() {
       const file = path.join(args.outDir, `${shot.id}.png`);
       if (shot.includeHud) {
         // Full-page capture so the DOM/canvas HUD overlay is included.
-        await page.screenshot({ path: file, scale: 'device', animations: 'disabled', timeout: 90000 });
+        await page.screenshot({ path: file, scale: 'device', animations: 'disabled', timeout: 240000 });
       } else {
         // Read the WebGL canvas directly. The renderer is created with
         // preserveDrawingBuffer, so this returns the exact framebuffer at

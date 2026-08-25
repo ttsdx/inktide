@@ -88,12 +88,18 @@ const SHEET = `
       rgba(10,18,38,0.00) 0px, rgba(10,18,38,0.00) 34px,
       rgba(10,18,38,0.30) 34px, rgba(10,18,38,0.30) 68px),
     ${CSS.waterDeep};
-  opacity: 0.94;
+  /* Deliberately well short of opaque. The results screen runs over a live
+     cinematic orbit of the ocean with the boats still on it, and at 0.94 that
+     was a flat navy field with a stripe pattern on it — the camera work behind
+     was invisible, so the game ended by cutting to a menu. The panels carry
+     their own ink silhouette, so the wash only needs to knock the water back
+     far enough for white text to hold, not to erase it. */
+  opacity: 0.62;
   animation: it-fade 320ms steps(4, end) both;
 }
 /* Separate keyframes rather than one shared set: animation-fill-mode both pins
    the final opacity, so a shared "to" would clobber the lighter variant. */
-.it-wash.it-light { opacity: 0.72; animation-name: it-fade-light; }
+.it-wash.it-light { opacity: 0.44; animation-name: it-fade-light; }
 
 .it-stack { position: relative; display: flex; flex-direction: column; align-items: center; }
 

@@ -388,11 +388,24 @@ export class Game {
 
     for (let i = 0; i < this.racers.length; i++) {
       const r = this.racers[i];
-      if (i === 0) {
+      if (i === 0 && !this.autopilot) {
         r.command.throttle = launched ? control.throttle : 0;
         r.command.brake = launched ? control.brake : 0;
         r.command.steer = control.steer;
         r.command.drift = launched && control.drift;
+      } else if (i === 0 && this.autopilot && this.playerAI && director) {
+        // The player boat driven by the clean AI preset. Used by the screenshot
+        // harness so a shot can be defined at "the finish" or "the results
+        // screen" — moments a scripted throttle-only input can never reach,
+        // because it drives straight off the first corner.
+        const prog = director.get(0);
+        if (prog) {
+          const cmd = this.playerAI.update(r.physics, this.states, prog, prog, ctx);
+          r.command.throttle = launched ? cmd.throttle : 0;
+          r.command.brake = launched ? cmd.brake : 0;
+          r.command.steer = cmd.steer;
+          r.command.drift = launched && cmd.drift;
+        }
       } else if (r.ai && director) {
         const prog = director.get(i);
         const playerProg = director.get(0);
@@ -457,6 +470,19 @@ export class Game {
     }
 
     // --- camera --------------------------------------------------------------
+    // The cinematic orbit has to be told what to orbit. Left at its default it
+    // circles the world origin, which is a kilometre from wherever the race
+    // actually finished, so the results screen played over empty water.
+    if (this.rig.mode === 'results' || this.rig.mode === 'orbit') {
+      const winner = director?.standings()[0];
+      const focusBoat =
+        winner && this.racers[winner.boatId] ? this.racers[winner.boatId] : this.player;
+      if (focusBoat) {
+        this.rig.orbitCenter.lerp(focusBoat.physics.position, Math.min(1, 3 * dt));
+        this.rig.orbitCenter.y = focusBoat.physics.position.y + 1.2;
+      }
+    }
+
     this.syncChaseTarget();
     if (control.cameraPressed) this.cycleCamera();
     this.rig.update(dt, this.chase, elapsed);
@@ -504,6 +530,9 @@ export class Game {
 
   private lastPlayerT = 0;
   private userPaused = false;
+  /** Harness only: hand the player's boat to an AI so a shot can reach the flag. */
+  private autopilot = false;
+  private playerAI: AIController | null = null;
   private hudCourse: HudCourse | null = null;
   private readonly curvatureAhead = new Float32Array(24);
   private readonly hudData: HudData = { phase: 'intro', player: null };
@@ -809,6 +838,28 @@ export class Game {
     setInput: (state: Record<string, unknown> | null): void => {
       this.input.scripted = state as never;
     },
+
+    /** Hand the player's boat to an AI so a shot can be defined at the finish. */
+    setAutopilot: (on: boolean): void => {
+      this.autopilot = on;
+      if (on && !this.playerAI && this.course) {
+        this.playerAI = new AIController(0, this.course, AI_PRESETS[0]);
+      }
+    },
+
+    /** Race state, so a shot can assert it reached the moment it asked for. */
+    raceState: () => ({
+      phase: this.director?.phase ?? 'intro',
+      countdown: this.director?.countdownValue ?? 0,
+      standings: (this.director?.standings() ?? []).map((p) => ({
+        boat: BOAT_SPECS[p.boatId].name,
+        lap: p.lap,
+        pos: p.position,
+        finished: p.finished,
+        finishPosition: p.finishPosition,
+        totalTime: Number(p.totalTime.toFixed(2)),
+      })),
+    }),
 
     setQuality: (tier: QualityTier): void => {
       this.engine.setTier(tier);
