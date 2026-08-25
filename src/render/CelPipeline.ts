@@ -240,14 +240,6 @@ export class CelPipeline {
         tColor: { value: null },
         tBloom: { value: null },
         uBloomStrength: { value: BLOOM_STRENGTH },
-        /**
-         * How much of the blurred bright-pass is discarded before it is added.
-         *
-         * The blur has a long low tail that reaches the whole frame; without a
-         * floor it lifts every dark tone and, on a cel palette, rotates them.
-         * See the note at the add itself.
-         */
-        uBloomFloor: { value: 0.06 },
         uVignette: { value: 0.18 },
         // Swept as a 3x3 grid against the knot frame and scored on mean
         // saturation versus clipped-pixel count, because "more contrasty" and
@@ -782,7 +774,6 @@ uniform sampler2D tBloom;
 uniform sampler2D tDebug;
 uniform float uDebugView;
 uniform float uBloomStrength;
-uniform float uBloomFloor;
 uniform float uVignette;
 uniform float uSaturation;
 uniform float uContrast;
@@ -815,22 +806,7 @@ void main() {
   vec3 c = texture(tColor, vUv).rgb * uExposure;
 
   if (uBloomStrength > 0.0) {
-    // Only the part of the spill that is genuinely bright is added.
-    //
-    // A blurred bright-pass has a long low-amplitude tail that covers the
-    // whole frame, and adding it flat lifts every dark tone in the picture. On
-    // a cel palette that is not a mild haze, it is destructive: the water's
-    // deep navy has a tiny green channel and a large blue one, so a uniform
-    // cyan-white addition raises its green by far more in relative terms than
-    // its blue and rotates the colour towards cyan. Measured on the band body
-    // with bloom switched off and on, the deepest tone went from rgb(3,61,98)
-    // to rgb(9,85,101) — 13 degrees of hue, on the one band the whole art
-    // direction leans on for its shadow.
-    //
-    // Subtracting a floor keeps the glow where a bright source actually is,
-    // which is what "graphic bloom, not photographic" was supposed to mean.
-    vec3 spill = max(texture(tBloom, vUv).rgb - uBloomFloor, vec3(0.0));
-    c += spill * uBloomStrength;
+    c += texture(tBloom, vUv).rgb * uBloomStrength;
   }
 
   // Luminance-only Reinhard. The shoulder is deliberately shallow (0.22, down
