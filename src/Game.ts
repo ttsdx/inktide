@@ -1,4 +1,4 @@
-import { Color, Group, Object3D, Vector3 } from 'three';
+import { Color, Frustum, Group, Matrix4, Object3D, Sphere, Vector3 } from 'three';
 import { PALETTE } from './core/Palette.ts';
 import { Engine, type QualityTier } from './core/Engine.ts';
 import { Input } from './core/Input.ts';
@@ -430,6 +430,8 @@ export class Game {
     // --- race logic ----------------------------------------------------------
     director?.update(this.states, ctx);
 
+    this.cullRacers();
+
     // --- visuals -------------------------------------------------------------
     this.emitters.length = 0;
     this.contacts.length = 0;
@@ -527,6 +529,40 @@ export class Game {
     this.updateAudio(dt);
     this.updateUi(uiCtx);
   };
+
+  private readonly frustum = new Frustum();
+  private readonly frustumMatrix = new Matrix4();
+  private readonly racerSphere = new Sphere(new Vector3(), 5.2);
+
+  /**
+   * Cull whole racers, not their parts.
+   *
+   * `Boat` and `Rider` both set `frustumCulled = false` on every mesh they own,
+   * and that is correct for them: a rig moves parts far outside the local
+   * bounding sphere three.js would test, so per-part culling makes limbs
+   * disappear. The consequence, though, was that all four boats and riders —
+   * 252 meshes — were drawn every frame regardless of where the camera pointed,
+   * and a probe measured only 78 of 415 scene meshes ever being culled.
+   *
+   * Testing one sphere per racer and toggling the group's visibility gets the
+   * culling back without reintroducing the popping, at a cost of four sphere
+   * tests. The sphere is generous (5.2 m against a 5.4 m hull) so a boat is
+   * never hidden while any part of it is still on screen.
+   *
+   * Visibility is a rendering concern only: physics, wake emission, hull
+   * contacts, race progress and the minimap all read the simulation directly,
+   * so an off-screen boat still races.
+   */
+  private cullRacers(): void {
+    const cam = this.engine.camera;
+    cam.updateMatrixWorld();
+    this.frustumMatrix.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+    this.frustum.setFromProjectionMatrix(this.frustumMatrix);
+    for (const r of this.racers) {
+      this.racerSphere.center.copy(r.physics.position);
+      r.boat.root.visible = this.frustum.intersectsSphere(this.racerSphere);
+    }
+  }
 
   private lastPlayerT = 0;
   private userPaused = false;
