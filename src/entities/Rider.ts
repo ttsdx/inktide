@@ -213,11 +213,16 @@ const poseMemory = new Map<number, PoseMemory>();
 // Rider
 // ---------------------------------------------------------------------------
 
-interface ArmChain {
+/** One side's bones, resolved once so the update loop never does a lookup. */
+interface SideChain {
   side: number;
+  shoulder: Object3D;
   upper: Object3D;
   fore: Object3D;
   hand: Object3D;
+  thigh: Object3D;
+  shin: Object3D;
+  foot: Object3D;
   /** Persistent smoothed IK result, kept apart from the celebration blend so a
    *  blend-out never feeds the celebration pose back into the racing solve. */
   qUpper: Quaternion;
@@ -233,7 +238,7 @@ export class Rider {
   private readonly geometries: BufferGeometry[] = [];
   private readonly materials: CelMaterial[] = [];
   private readonly outlines: Mesh[] = [];
-  private readonly arms: ArmChain[];
+  private readonly sides: SideChain[];
 
   private time = 0;
   /**
@@ -353,11 +358,17 @@ export class Rider {
       this.part(buildBoot(), gear, r.sided('foot', side), `boot${tag}`);
     }
 
-    this.arms = [SIDE_LEFT, SIDE_RIGHT].map((side) => ({
+    this.sides = [SIDE_LEFT, SIDE_RIGHT].map((side) => ({
       side,
+      shoulder: r.sided('shoulder', side),
       upper: r.sided('upperArm', side),
       fore: r.sided('forearm', side),
       hand: r.sided('hand', side),
+      thigh: r.sided('thigh', side),
+      shin: r.sided('shin', side),
+      foot: r.sided('foot', side),
+      // Seed from rest so the very first frame slerps out of the racing crouch
+      // rather than out of the identity rotation.
       qUpper: r.restOf(r.sided('upperArm', side)).clone(),
       qFore: r.restOf(r.sided('forearm', side)).clone(),
     }));
@@ -441,16 +452,29 @@ export class Rider {
     const weightShift = expApproach(prev.weightShift, weightTarget, 6, h);
 
     // --- crouch ------------------------------------------------------------
-    let crouchTarget = clamp(state.landingImpact / 8, 0, 1);
-    crouchTarget = Math.max(crouchTarget, clamp(state.collisionImpact / 900, 0, 0.8));
-    // Ploughing the nose into a wave loads the legs just like a landing does.
-    crouchTarget = Math.max(crouchTarget, clamp(state.submersion / 0.9, 0, 0.5));
-    // In the air the rider pre-loads for the landing rather than dangling.
-    if (state.airborne) crouchTarget = Math.max(crouchTarget, 0.2 + clamp(state.airTime * 0.4, 0, 0.25));
-    // Fast attack, slow release. `landingImpact` is set for exactly one frame,
-    // so a symmetric filter would swallow it entirely; the body, meanwhile,
-    // takes the better part of a second to stand back up.
-    const crouch = expApproach(prev.crouch, crouchTarget, crouchTarget > prev.crouch ? 26 : 3, h);
+    // `landingImpact` and `collisionImpact` are set for exactly ONE frame, so
+    // they are applied as a floor rather than pushed through a filter. No
+    // smoother can reach its target in a single step — running a one-frame
+    // spike through even a very fast attack scales a full-force landing down to
+    // about a third of its intended size, and the harder the impact the more of
+    // it gets thrown away. Stepping the drive signal instead is safe precisely
+    // because the body is moved by an underdamped spring downstream: a step
+    // into a spring is exactly the impulse response we want out of a landing.
+    const impulse = Math.max(clamp(state.landingImpact / 8, 0, 1), clamp(state.collisionImpact / 900, 0, 0.8));
+
+    // Sustained load, which does want filtering: ploughing the nose into a wave
+    // squats the legs the same way a landing does, and in the air the rider
+    // pre-loads for the arrival instead of dangling.
+    let sustained = clamp(state.submersion / 0.9, 0, 0.5);
+    if (state.airborne) sustained = Math.max(sustained, 0.2 + clamp(state.airTime * 0.4, 0, 0.25));
+    // Fast attack, slower release: the legs load instantly and the body takes
+    // the better part of a second to stand back up. The release is kept quick
+    // enough that the rig's knee spring, not this filter, shapes the recovery —
+    // otherwise the bounce is smoothed away here and the landing lands soft.
+    const crouch = Math.max(
+      expApproach(prev.crouch, sustained, sustained > prev.crouch ? 26 : 5.5, h),
+      impulse,
+    );
 
     const throttle = expApproach(prev.throttle, clamp(state.throttleLevel, 0, 1), 8, h);
 
@@ -523,11 +547,12 @@ export class Rider {
     // --- drive signals -----------------------------------------------------
     const lean = clamp(springStep(this.sLean, clamp(pose.lean, -1, 1), 11, 1, dt), -1.2, 1.2);
     const weight = clamp(springStep(this.sWeight, clamp(pose.weightShift, -1, 1), 9, 0.85, dt), -1.2, 1.2);
-    // zeta 0.42 is the whole landing. A critically damped knee settles into the
-    // compression like a hydraulic door closer; an underdamped one drops past
-    // the target and pushes back, which is what a body absorbing an impact
-    // actually does and is the difference between "landed" and "arrived".
-    const crouch = clamp(springStep(this.sCrouch, clamp(pose.crouch, 0, 1), 15.5, 0.42, dt), -0.25, 1.45);
+    // The damping ratio here is the whole landing. A critically damped knee
+    // settles into the compression like a hydraulic door closer; at zeta 0.32
+    // it drops past the target, rebounds a little above neutral and rings out
+    // over two cycles, which is what a body absorbing an impact actually does
+    // and is the difference between "landed" and "arrived".
+    const crouch = clamp(springStep(this.sCrouch, clamp(pose.crouch, 0, 1), 15.5, 0.32, dt), -0.3, 1.45);
     // Positive sag means the hull is accelerating upwards and the rider's mass
     // is lagging behind it, i.e. the body compresses into the boat. Negative is
     // the drop into a trough, where they extend and go light.
@@ -618,12 +643,14 @@ export class Rider {
       0.7,
     );
 
-    for (const side of [SIDE_LEFT, SIDE_RIGHT]) {
-      const shoulderShrug = side * (shrug + lean * 0.02 * side);
-      this.applyBone(this.rig.sided('shoulder', side), 0, 0, shoulderShrug, 0, 0, side * 0.26, cel, 0.45);
-      this.applyBone(this.rig.sided('thigh', side), thX, 0, side * kneeSplay, 0.28, 0, 0, cel, 0.9);
-      this.applyBone(this.rig.sided('shin', side), shX, 0, 0, -0.3, 0, 0, cel, 1.1);
-      this.applyBone(this.rig.sided('foot', side), ftX, 0, 0, 0.08, 0, 0, cel, 0.6);
+    for (const chain of this.sides) {
+      const side = chain.side;
+      // Shrug is mirrored (both shoulders rise); the lean term is not, so the
+      // shoulder *line* tilts with the turn instead of both ends lifting.
+      this.applyBone(chain.shoulder, 0, 0, side * shrug + lean * 0.02, 0, 0, side * 0.26, cel, 0.45);
+      this.applyBone(chain.thigh, thX, 0, side * kneeSplay, 0.28, 0, 0, cel, 0.9);
+      this.applyBone(chain.shin, shX, 0, 0, -0.3, 0, 0, cel, 1.1);
+      this.applyBone(chain.foot, ftX, 0, 0, 0.08, 0, 0, cel, 0.6);
     }
 
     _hip.copy(this.rig.restPositionOf(this.rig.hips));
@@ -666,7 +693,7 @@ export class Rider {
     const follow = 1 - Math.exp(-24 * dt);
     const tuck = clamp(inten * 0.35 + crouch * 0.2, 0, 0.7);
 
-    for (const arm of this.arms) {
+    for (const arm of this.sides) {
       const s = arm.side;
       const isThrottleHand = s === SIDE_RIGHT;
 
@@ -693,10 +720,13 @@ export class Rider {
       shoulder.worldToLocal(_ikTarget);
       _ikTarget.sub(arm.upper.position);
 
-      // Elbows out and back at rest, tucked in at speed, and flared up under
+      // Elbows sit out and back at rest, tuck in at speed, and flare up under
       // braking — the chicken-wing a rider throws when they are hanging off the
-      // bars to stop themselves going over them.
-      _ikPole.set(s * (0.9 - 0.45 * tuck), -0.3 + weight * 0.3, -0.55 - 0.25 * tuck);
+      // bars to stop themselves going over them. The X term is kept modest on
+      // purpose: a pole pointing hard sideways puts the elbows outside the
+      // hull, which looks wrong and is the first thing to break if the rig is
+      // scaled onto a narrower boat.
+      _ikPole.set(s * (0.6 - 0.28 * tuck), -0.55 + weight * 0.38, -0.74 - 0.2 * tuck);
 
       solveTwoBone(_ikTarget, this.rig.upperArmLength, this.rig.forearmLength, _ikPole, _qa, _qb);
       arm.qUpper.slerp(_qa, follow);
