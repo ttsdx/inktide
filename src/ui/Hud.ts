@@ -488,13 +488,23 @@ export class Hud {
     });
 
     const times = resolveTimes(data, pp);
-    const rows: Array<[string, string, string, number]> = [
-      ['CUR', formatTime(times.current), CSS.foam, 26 * u],
-      ['LAST', formatTime(times.last), CSS.foam, 21 * u],
-      ['BEST', formatTime(times.best), CSS.amber, 21 * u],
+    // A row with no time yet is a row with NO TIME YET, and it has to look like
+    // one. Both placeholders used to be drawn at full weight, and in two
+    // different colours — white for LAST and amber for BEST — so on the grid
+    // the panel showed three rows of confident dashes in a mix of colours and
+    // read as UI that had been wired up wrong. One neutral tone at a third of
+    // the opacity says "not set" without the panel having to change size.
+    const set = (v: number) => Number.isFinite(v) && v > 0;
+    const rows: Array<[string, number, string, number]> = [
+      ['CUR', times.current, CSS.foam, 26 * u],
+      ['LAST', times.last, CSS.foam, 21 * u],
+      ['BEST', times.best, CSS.amber, 21 * u],
     ];
     let ry = sy + 11 * u;
-    for (const [label, value, fill, size] of rows) {
+    for (const [label, seconds, litFill, size] of rows) {
+      const has = set(seconds);
+      const value = formatTime(seconds);
+      const fill = has ? litFill : CSS.cyan;
       drawText(c, label, m + 16 * u, ry + (size - 13 * u) * 0.5, {
         size: 13 * u,
         fill: CSS.cyan,
@@ -509,9 +519,10 @@ export class Hud {
         size,
         fill,
         align: 'right',
-        weight: 0.19,
-        outline: 0.11,
-        shadow: 2 * u,
+        weight: has ? 0.19 : 0.13,
+        outline: has ? 0.11 : 0.06,
+        shadow: has ? 2 * u : 0,
+        alpha: has ? 1 : 0.34,
       });
       ry += size + 14 * u;
     }
@@ -628,7 +639,16 @@ export class Hud {
     // Backing plate: the arc alone does not give the numerals enough contrast
     // against bright foam, and foam is exactly what is behind the bottom-right
     // corner whenever the player is going fast enough to look at this.
-    const plate = panelPath(cx - 106 * u, cy - 106 * u, 212 * u, 96 * u, 14 * u, 24 * u);
+    // Sized for three digits with real padding, and tall enough that a 58u
+    // numeral does not break its top edge.
+    //
+    // At 212 by 96 the plate gave a glyph of that size eight units of headroom
+    // once its outline and drop shadow were counted, so the digits crossed the
+    // top edge into the tick arc and the last one hung out over the right
+    // chamfer. It reads as a layout authored against a two-digit test value,
+    // which is exactly what it was: the speedo only passes three digits once
+    // the boat is over 100 km/h.
+    const plate = panelPath(cx - 122 * u, cy - 116 * u, 244 * u, 110 * u, 14 * u, 24 * u);
     c.save();
     c.globalAlpha *= 0.9;
     c.fillStyle = CSS.ink;
@@ -697,9 +717,14 @@ export class Hud {
 
     // km/h reads bigger and changes faster than m/s, which is what an arcade
     // speedo is for. The physics stays in m/s everywhere else.
+    // Kept clear of the tick arc, whose inner edge is at 0.79 of the gauge
+    // radius — 98 units from the centre. Anything drawn above that line near
+    // the centreline runs through the ticks, which is what the numerals were
+    // doing: the red arc passed straight across the digits and neither could
+    // be read against the other.
     const kph = Math.max(0, Math.round(shown * 3.6));
-    drawText(c, `${kph}`, cx, cy - 98 * u, {
-      size: 58 * u,
+    drawText(c, `${kph}`, cx, cy - 92 * u, {
+      size: 52 * u,
       fill: boosting ? CSS.amber : CSS.foam,
       align: 'center',
       weight: 0.185,
