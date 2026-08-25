@@ -19,7 +19,7 @@ import {
   ENGINE_NOZZLE,
   RUDDER_PIVOT,
 } from './boatGeometry.ts';
-import { buildRaceNumberGeometry } from './liveryGeometry.ts';
+import { buildRaceNumberGeometry, buildRaceNumberInkGeometry } from './liveryGeometry.ts';
 import { HANDLEBAR_POINT, RIDER_MOUNT } from './hullSpec.ts';
 
 /**
@@ -163,13 +163,29 @@ export class Boat {
       matcapStrength: 0.12,
       name: 'BoatNumber',
     });
-    // Ink lighter than the hull's. The number sits ON the boat, so a contour as
-    // heavy as the boat's own silhouette would make it read as a separate
-    // object stuck to the side.
-    const decalInk = { outline: { widthPx: 2.4 } };
+    // The keyline is geometry, not an inverted hull, and it opts out of the
+    // outline pass entirely — see `liveryGeometry`. A flat plate seen face-on
+    // cannot be outlined by pushing along its smoothed normals, because those
+    // point out of its face; the shell just moves the plate outboard and its
+    // silhouette does not grow. An ink probe confirmed the shell was present
+    // and correctly configured with a 19 px budget, and drawing nothing.
+    const ink = this.material({
+      color: PALETTE.ink,
+      vertexColors: true,
+      // Flat: a keyline that catches a highlight stops reading as a line.
+      specStrength: 0,
+      matcapStrength: 0,
+      rimStrength: 0,
+      ambientWrap: 0.95,
+      name: 'BoatNumberInk',
+    });
+    const noOutline = { noOutline: true };
     const number = ci + 1;
-    this.part(buildRaceNumberGeometry(number, -1), decal, this.visual, 'numberPort', decalInk);
-    this.part(buildRaceNumberGeometry(number, 1), decal, this.visual, 'numberStarboard', decalInk);
+    for (const side of [-1, 1] as const) {
+      const tag = side < 0 ? 'Port' : 'Starboard';
+      this.part(buildRaceNumberInkGeometry(number, side), ink, this.visual, `numberInk${tag}`, noOutline);
+      this.part(buildRaceNumberGeometry(number, side), decal, this.visual, `number${tag}`, noOutline);
+    }
 
     // Fine ink on the small parts. A 2.6 px line is right for a 5 m hull and
     // completely swallows a 7 cm rudder blade, which at race distance turns

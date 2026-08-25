@@ -45,6 +45,23 @@ const STROKE = 0.2;
 /** How far the plate stands off the hull surface, in metres. */
 const RELIEF = 0.012;
 
+/**
+ * How far the ink plate is grown past the numeral, in box units.
+ *
+ * A decal is the one thing in this project whose outline cannot come from the
+ * inverted hull. That technique widens a silhouette by pushing vertices along
+ * their smoothed normals, and on a flat plate seen face-on those normals point
+ * out of the FACE — so the shell moves the plate a few millimetres further
+ * outboard and its silhouette does not grow by a single pixel. A probe
+ * confirmed the shell was there, correctly configured, with a 19 px push
+ * budget, and drawing nothing.
+ *
+ * So the keyline is geometry: the same numeral built slightly larger, in ink,
+ * sitting just under the white one. Which is also how a decal with a keyline is
+ * actually made.
+ */
+const INK_OUTSET = 0.055;
+
 type Rect = readonly [number, number, number, number]; // u0, v0, u1, v1
 
 /**
@@ -96,13 +113,22 @@ interface Builder {
  * Both faces are emitted, plus the four sides, because the ink shell inverts a
  * closed volume — an open plate turns inside out and the outline explodes.
  */
-function segment(b: Builder, rect: Rect, side: -1 | 1, mirror: boolean, colour: Color): void {
+function segment(
+  b: Builder,
+  rect: Rect,
+  side: -1 | 1,
+  mirror: boolean,
+  colour: Color,
+  outset: number,
+  reliefIn: number,
+  reliefOut: number,
+): void {
   const [u0, v0, u1, v1] = rect;
   const corners: Array<[number, number]> = [
-    [u0, v0],
-    [u1, v0],
-    [u1, v1],
-    [u0, v1],
+    [u0 - outset, v0 - outset],
+    [u1 + outset, v0 - outset],
+    [u1 + outset, v1 + outset],
+    [u0 - outset, v1 + outset],
   ];
 
   const base = b.pos.length / 3;
@@ -118,9 +144,7 @@ function segment(b: Builder, rect: Rect, side: -1 | 1, mirror: boolean, colour: 
     // buried its top half 4 cm inside the hull.
     const x = MathUtils.lerp(wall.xBottom, wall.xTop, t);
 
-    // Inner face a hair proud of the panel so it never z-fights with it; the
-    // outer face carries the relief.
-    for (const push of [0.002, RELIEF]) {
+    for (const push of [reliefIn, reliefOut]) {
       b.pos.push(x + push * side, y, z);
       b.col.push(colour.r, colour.g, colour.b);
     }
@@ -167,6 +191,16 @@ function segment(b: Builder, rect: Rect, side: -1 | 1, mirror: boolean, colour: 
   }
 }
 
+function finish(b: Builder): BufferGeometry {
+  const geo = new BufferGeometry();
+  geo.setAttribute('position', new BufferAttribute(new Float32Array(b.pos), 3));
+  geo.setAttribute('color', new BufferAttribute(new Float32Array(b.col), 3));
+  geo.setIndex(b.idx);
+  geo.computeVertexNormals();
+  geo.computeBoundingSphere();
+  return geo;
+}
+
 /**
  * The race number for one flank, in hull space.
  *
@@ -181,13 +215,27 @@ export function buildRaceNumberGeometry(digit: number, side: -1 | 1): BufferGeom
 
   // Starboard reads bow-forward along +z; port is the mirror of it.
   const mirror = side === -1;
-  for (const name of segs) segment(b, SEGMENTS[name], side, mirror, white);
+  for (const name of segs) {
+    segment(b, SEGMENTS[name], side, mirror, white, 0, RELIEF * 0.75, RELIEF * 1.5);
+  }
+  return finish(b);
+}
 
-  const geo = new BufferGeometry();
-  geo.setAttribute('position', new BufferAttribute(new Float32Array(b.pos), 3));
-  geo.setAttribute('color', new BufferAttribute(new Float32Array(b.col), 3));
-  geo.setIndex(b.idx);
-  geo.computeVertexNormals();
-  geo.computeBoundingSphere();
-  return geo;
+/**
+ * The numeral's keyline: the same shape grown by `INK_OUTSET`, in ink, sitting
+ * just under the white plate so only the margin shows.
+ *
+ * Given its own mesh rather than being folded into the numeral because the two
+ * need different materials — the number is painted and catches a highlight, the
+ * keyline is flat ink and must not.
+ */
+export function buildRaceNumberInkGeometry(digit: number, side: -1 | 1): BufferGeometry {
+  const segs = DIGITS[digit] ?? DIGITS[1];
+  const b: Builder = { pos: [], col: [], idx: [] };
+  const white = new Color(1, 1, 1);
+  const mirror = side === -1;
+  for (const name of segs) {
+    segment(b, SEGMENTS[name], side, mirror, white, INK_OUTSET, RELIEF * 0.2, RELIEF * 0.7);
+  }
+  return finish(b);
 }

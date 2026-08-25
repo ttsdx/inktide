@@ -16,6 +16,7 @@
     "probe:sea": "tsx tools/seaStateSweep.ts",
     "probe:perf": "tsx tools/perfProbe.ts",
     "probe:rider": "tsx tools/riderProbe.ts",
+    "probe:ink": "tsx tools/inkProbe.ts",
     "probe:audio": "node tools/audioProbe.mjs"
   },
   "dependencies": {
