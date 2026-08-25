@@ -1225,7 +1225,7 @@ void main() {
   // -----------------------------------------------------------------------
   // FOAM TONE: three flat steps, never a ramp.
   //
-  // `freshness` is a continuous field — the wake texture's age term is smooth
+  // 'freshness' is a continuous field — the wake texture's age term is smooth
   // by construction — so mixing the foam colour by it directly painted the
   // inside of every foam patch as an airbrushed gradient. Cropped to native
   // resolution, the wake behind a boat was a single smooth wash running most
@@ -1237,7 +1237,7 @@ void main() {
   // The edge was never the problem here. Quantising the interior is.
   //
   // Three tones rather than two, and the deepest is pulled towards the crest
-  // cyan rather than being another near-white: `foamShade` and `foam` are 0.72
+  // cyan rather than being another near-white: foamShade and foam are 0.72
   // and 0.98 in value, so a two-step foam has almost no internal contrast and
   // reads as one tone with a slightly dirty edge whatever the threshold does.
   // -----------------------------------------------------------------------
