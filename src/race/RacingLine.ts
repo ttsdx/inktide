@@ -496,18 +496,35 @@ void main() {
   // polygon boundary.
   // ----------------------------------------------------------------------
   float rail = step(0.70, across);
+  // A drawn contour at the outermost edge. Every other object in the game is
+  // inked and the ribbon was not, which is most of why it read as a light
+  // effect laid over the scene rather than as a marking painted on the water.
+  // Dark green rather than the shared ink: a near-black keyline around a
+  // glowing strip reads as a hole cut in the water.
+  float edgeInk = step(0.90, across);
   float margin = 1.0 - smoothstep(0.94, 1.0, across);
 
   // ----------------------------------------------------------------------
   // 4. COMPOSITE
   // ----------------------------------------------------------------------
   if (uHaloMode > 0.5) {
-    // Additive spill. Quantised into four steps so even the glow is banded, and
-    // hollowed out in the middle so it does not just brighten the body.
-    float falloff = 1.0 - clamp((across - 0.34) / 0.66, 0.0, 1.0);
-    falloff = floor(falloff * 4.0 + 0.001) / 4.0;
+    // Additive spill. Quantised into three steps so even the glow is banded,
+    // and hollowed out so it lies entirely OUTSIDE the ribbon rather than on
+    // top of it.
+    //
+    // The halo mesh is 1.5x the ribbon's width, so the ribbon occupies the
+    // inner 0.67 of it. Starting the falloff at 0.34 therefore laid half the
+    // glow directly over the body — and since the glow is additive at 0.34 of a
+    // fully saturated green while the body between chevrons is only 0.11 alpha
+    // of a dim one, the spill was substantially louder than the line it was
+    // meant to be spilling from. Cropped to native resolution the ribbon read
+    // as a soft green wash with no chevrons visible anywhere in it, which is
+    // what a critic called a screen tear: the structure was there and was being
+    // painted over by its own glow.
+    float falloff = 1.0 - clamp((across - 0.66) / 0.34, 0.0, 1.0);
+    falloff = floor(falloff * 3.0 + 0.001) / 3.0;
     float pulse = 0.72 + 0.28 * step(0.5, fract(vAlong / 46.0 - uTime * 0.24));
-    vec3 col = base * falloff * 0.34 * pulse * mix(0.45, 1.0, vDetail);
+    vec3 col = base * falloff * 0.20 * pulse * mix(0.45, 1.0, vDetail);
     outColor = vec4(col, 1.0);
     outNormalDepth = vec4(0.0, 0.0, 0.0, 1.0);
     return;
@@ -522,6 +539,7 @@ void main() {
   // Crest lift: the ribbon brightens on the tops of the swell, which is the one
   // cue that tells the player the line is on the water rather than above it.
   col += base * step(0.66, vCrest) * 0.16;
+  col = mix(col, uLineDim * 0.30, edgeInk);
 
   // Alpha: the body is mostly solid so the colours read true against blue
   // water; the interior between chevrons stays translucent so the water bands
@@ -535,8 +553,14 @@ void main() {
   // rails. The body between them only has to be present enough to connect
   // them, so it drops from 0.30 to 0.11 and the cap comes down from 0.94.
   // Same hue, same brief ("a glowing green racing line"), a third of the ink.
-  float alpha = 0.11 + 0.46 * chevron + 0.38 * rail;
-  alpha = min(alpha, 0.66) * margin;
+  // The body carries a little more than it used to, now that the halo has been
+  // pulled off the top of it: with the spill hollowed out to sit entirely
+  // outside the rails, an 0.11 body left the ribbon with nothing between its
+  // chevrons at all.
+  float alpha = 0.18 + 0.44 * chevron + 0.30 * rail;
+  // The contour is the one part that is never translucent. A keyline that fades
+  // is not a keyline.
+  alpha = max(min(alpha, 0.72), edgeInk * 0.88) * margin;
 
   // Fade out at extreme range instead of turning the far side of the circuit
   // into a hard green wire across the horizon.
