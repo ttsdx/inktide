@@ -14,7 +14,8 @@
     "probe:race": "tsx tools/raceProbe.ts",
     "probe:course": "tsx tools/courseProbe.ts",
     "probe:sea": "tsx tools/seaStateSweep.ts",
-    "probe:perf": "tsx tools/perfProbe.ts"
+    "probe:perf": "tsx tools/perfProbe.ts",
+    "probe:audio": "node tools/audioProbe.mjs"
   },
   "dependencies": {
     "three": "^0.185.1"

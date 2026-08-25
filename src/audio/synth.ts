@@ -158,6 +158,32 @@ export function makeImpulseResponse(
       if (idx < length) data[idx] += (k % 2 === 0 ? 0.55 : -0.42) * Math.pow(0.72, k);
     }
   }
+
+  // Normalise the impulse to unit energy.
+  //
+  // A ConvolverNode's output gain is the energy of its impulse response, and
+  // this one is a couple of seconds of filtered noise: left raw its energy is
+  // large and arbitrary, so the reverb send became a big unmeasured boost on
+  // everything routed through it. Measuring the master bus showed the effect
+  // clearly — short transients like an impact thud passed through at roughly
+  // the level they were written, but a sustained chord accumulated tail energy
+  // and the finish sting peaked at 1.7 against an engine bed of 0.07, over
+  // twenty times the rest of the mix and far into clipping. Scaling to unit
+  // energy makes the send level in AudioEngine mean what it says.
+  let energy = 0;
+  for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
+    const data = buffer.getChannelData(ch);
+    for (let i = 0; i < data.length; i++) energy += data[i] * data[i];
+  }
+  energy = Math.sqrt(energy / buffer.numberOfChannels);
+  if (energy > 1e-9) {
+    const scale = 1 / energy;
+    for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
+      const data = buffer.getChannelData(ch);
+      for (let i = 0; i < data.length; i++) data[i] *= scale;
+    }
+  }
+
   return buffer;
 }
 

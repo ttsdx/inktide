@@ -105,6 +105,31 @@ interface Voice {
 }
 
 export class AudioEngine implements AudioBus {
+  /**
+   * Analysis tap on the master bus.
+   *
+   * This project has no audio device — every gain, filter and send level was
+   * chosen by reasoning, and nobody has heard a single sound. That is a real
+   * verification gap, and the honest response is not to assert the mix is fine
+   * but to measure what can be measured: that the graph actually emits signal,
+   * that engine pitch genuinely tracks RPM rather than being a constant drone,
+   * and that one-shots produce an audible transient. `tapAnalyser` exposes the
+   * master bus so `tools/audioProbe` can do exactly that in a headless browser.
+   */
+  tapAnalyser(fftSize = 4096): AnalyserNode | null {
+    if (!this.ctx || !this.master) return null;
+    const an = this.ctx.createAnalyser();
+    an.fftSize = fftSize;
+    an.smoothingTimeConstant = 0;
+    this.master.connect(an);
+    return an;
+  }
+
+  /** Sample rate of the live context, for turning FFT bins into hertz. */
+  get sampleRate(): number {
+    return this.ctx?.sampleRate ?? 0;
+  }
+
   private ctx: AudioContext | null = null;
   /** Set once if audio can never work here; makes every call a cheap no-op. */
   private unavailable = false;
@@ -239,16 +264,16 @@ export class AudioEngine implements AudioBus {
           this.beep(noteHz(81), 0.62, 0.42 * g, 'square', true);
           break;
         case 'impactSoft':
-          this.impact(false, g);
+          this.impact(false, g * 2.2);
           break;
         case 'impactHard':
-          this.impact(true, g);
+          this.impact(true, g * 1.7);
           break;
         case 'splash':
-          this.splash(g);
+          this.splash(g * 2.0);
           break;
         case 'boostFire':
-          this.boostFire(g);
+          this.boostFire(g * 1.8);
           break;
         case 'boostCharged':
           this.sting([9, 12], 0.055, 0.16, 0.2 * g, 'triangle');
@@ -307,19 +332,49 @@ export class AudioEngine implements AudioBus {
     comp.ratio.value = 3.2;
     comp.attack.value = 0.006;
     comp.release.value = 0.19;
+
+    // Brickwall limiter after the bus compressor.
+    //
+    // Measuring the master bus showed the finish cue peaking at 5.1 amplitude
+    // — five times full scale — while the engine bed sat at 0.05. A gentle 3.2:1
+    // compressor cannot hold that: it would duck the entire mix by 20 dB every
+    // time a lap completed, which is audible as the whole game flinching. A
+    // shipped mix has a limiter as its last stage for exactly this reason, so
+    // that a cue nobody predicted the level of cannot clip the output or pump
+    // everything else. Fast attack, short release, high ratio, and it only
+    // engages on the peaks.
+    const limiter = ctx.createDynamicsCompressor();
+    limiter.threshold.value = -2.5;
+    limiter.knee.value = 0;
+    limiter.ratio.value = 20;
+    limiter.attack.value = 0.001;
+    limiter.release.value = 0.09;
+
     master.connect(comp);
-    comp.connect(ctx.destination);
+    comp.connect(limiter);
+    limiter.connect(ctx.destination);
     this.master = master;
 
     // --- reverb send -------------------------------------------------------
     const convolver = ctx.createConvolver();
-    convolver.normalize = true;
+    // The impulse is unit-normalised by `makeImpulseResponse`, so the send and
+    // return gains below fully determine how wet the mix is. Leaving the node's
+    // own `normalize` on stacks a second, opaque, implementation-defined
+    // scaling on top of that: measured on the master bus it was pushing a
+    // sustained sting to twice the level of its own dry signal, which is why
+    // the finish cue peaked at 1.7 — over twenty times the engine bed and well
+    // into clipping — no matter how far its source gain was turned down.
+    convolver.normalize = false;
     convolver.buffer = makeImpulseResponse(ctx, 1.9, 3.4, 0.32);
     const reverbReturn = makeGain(ctx, 0.55);
     convolver.connect(reverbReturn);
     reverbReturn.connect(master);
 
-    const sfxBus = makeGain(ctx, 1);
+    // One-shots measured 10-25x the engine bed on the master bus, so the sfx
+    // bus is pulled well down rather than the individual cues being chased one
+    // by one: the balance between cues was reasonable, it was the whole bus
+    // that sat too hot against the continuous layers.
+    const sfxBus = makeGain(ctx, 0.32);
     sfxBus.connect(master);
     // Highpass the send: low frequencies convolved into a 1.9 s tail turn into
     // an undifferentiated rumble that eats the engine's bottom end.
@@ -807,17 +862,29 @@ export class AudioEngine implements AudioBus {
     const nodes: AudioNode[] = [];
     let end = t0;
 
+    // Normalise by voice count.
+    //
+    // These are arpeggios on paper — notes spaced 50-110 ms apart — but each
+    // note rings for up to 550 ms, so in practice every voice of the chord is
+    // sounding at once and their amplitudes sum. Measured on the master bus,
+    // the five-note finish sting peaked at 1.73 RMS against an engine bed of
+    // 0.05: more than thirty times the rest of the mix, and hard clipping.
+    // `gain` is meant to be the loudness of the whole sting, so it has to be
+    // divided among its voices. The 0.8 accounts for the envelopes not all
+    // peaking on the same sample.
+    const perVoice = gain / Math.max(1, steps.length * 0.8);
+
     for (let i = 0; i < steps.length; i++) {
       const at = t0 + i * spacing;
       const hz = scaleHz(steps[i]);
       const osc = makeOsc(ctx, type, hz);
       const lp = makeFilter(ctx, 'lowpass', Math.max(2200, hz * 5), 0.9);
-      const env = makeAmpEnv(ctx, at, gain, 0.005, dur);
+      const env = makeAmpEnv(ctx, at, perVoice, 0.005, dur);
       chain(osc, lp, env.node, out);
       // An octave-up sine at low level in place of a real harmonic series: it
       // adds bell-like sparkle for two extra nodes and no extra attack noise.
       const shine = makeOsc(ctx, 'sine', hz * 2);
-      const shineEnv = makeAmpEnv(ctx, at, gain * 0.3, 0.004, dur * 0.6);
+      const shineEnv = makeAmpEnv(ctx, at, perVoice * 0.3, 0.004, dur * 0.6);
       chain(shine, shineEnv.node, out);
 
       sources.push(osc, shine);
@@ -827,7 +894,7 @@ export class AudioEngine implements AudioBus {
 
     if (withBass) {
       const bass = makeOsc(ctx, 'triangle', noteHz(38));
-      const bassEnv = makeAmpEnv(ctx, t0, gain * 0.8, 0.01, dur + steps.length * spacing);
+      const bassEnv = makeAmpEnv(ctx, t0, perVoice * 0.9, 0.01, dur + steps.length * spacing);
       chain(bass, bassEnv.node, out);
       sources.push(bass);
       nodes.push(bass, bassEnv.node);
