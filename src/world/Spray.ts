@@ -427,12 +427,20 @@ void main() {
   float a = atan(vQuad.y, vQuad.x);
   float r = length(vQuad);
 
-  // Lumpy, not round. Two low harmonics with a per-particle phase give each
-  // droplet its own silhouette, so a burst is forty different shapes rather
-  // than forty copies of one circle at forty sizes.
+  // Lumpy, not round. Two low harmonics per droplet — but the ORDER and the
+  // depth of each harmonic vary per particle, not just its phase.
+  //
+  // With the orders fixed at 3 and 5 every droplet in the game was the same
+  // trefoil seen at a different rotation, and a burst read as a handful of
+  // identical clovers rather than as torn water. Varying only the phase cannot
+  // fix that: the number of lobes is what the eye actually reads.
+  float h1 = 2.0 + floor(fract(vSeed * 0.317) * 3.0);   // 2, 3 or 4 lobes
+  float h2 = 5.0 + floor(fract(vSeed * 0.713) * 3.0);   // 5, 6 or 7
+  float d1 = 0.11 + 0.17 * fract(vSeed * 1.31);
+  float d2 = 0.04 + 0.11 * fract(vSeed * 2.79);
   float lump = 1.0
-    + 0.20 * sin(a * 3.0 + vSeed)
-    + 0.11 * sin(a * 5.0 - vSeed * 1.7);
+    + d1 * sin(a * h1 + vSeed)
+    + d2 * sin(a * h2 - vSeed * 1.7);
   float edge = 0.86 * lump;
 
   // Hard cut. fwidth keeps it exactly one pixel wide, so a droplet two metres
@@ -444,27 +452,32 @@ void main() {
   // what the first version drew — a droplet is more outline than droplet, and
   // the capture came back as a scatter of dark grey pebbles instead of white
   // water. Ink is the last 10%, and everything inside it is foam.
-  // 4% of the radius, not 10%. Particles sit at the BOTTOM of the ink
-  // hierarchy: a frame audit found forty spray droplets each carrying a
-  // heavier contour than the hero boat, which inverts the reading order and
-  // sends the eye to the popcorn. The droplets keep a contour so they still
-  // read as drawn rather than as bloom, but it must never out-weigh the hull.
-  float rimRaw = 1.0 - smoothstep(edge * 0.96 - aa, edge * 0.96 + aa, r);
+  // The contour is a fixed number of PIXELS, like every other line in this
+  // project, not a fraction of the droplet.
+  //
+  // It was 4% of the radius, which is the wrong parameterisation in both
+  // directions: on a near droplet 60 px across that is a 1.2 px hairline that
+  // does not read at all, so the particle came back as a soft blob with no
+  // ink on it, and on a small one it is nothing. Particles still sit at the
+  // bottom of the ink hierarchy — 1.6 px against the hull's 3 to 6 — so they
+  // read as drawn without out-weighing the boat, which is what the percentage
+  // was originally trying to protect against.
+  float inkW = aa * 1.6;
+  float rimRaw = 1.0 - smoothstep(edge - inkW - aa, edge - inkW + aa, r);
 
   // Band-limit the ink, and do it explicitly rather than trusting the hard
   // step to degrade gracefully — it does not.
   //
-  // The contour is 10% of the radius wide. Once a droplet is small enough on
-  // screen that one pixel covers more than that, the inner and outer
-  // smoothsteps overlap, and their difference stops being a line: it becomes a
-  // partial ink wash over the entire droplet, centre included. Foam mixed
-  // halfway to a navy ink is a mid grey, which is exactly what the burst
-  // capture showed near the horizon — a scatter of grey gravel hanging over
-  // blue water. Below the resolvable width the ink is dropped entirely and the
-  // droplet is drawn as pure foam, which is the same trade an inker makes when
-  // a shape gets too small to outline: you do not draw a thinner line, you stop
-  // drawing the line.
-  float inkVisible = 1.0 - smoothstep(edge * 0.06, edge * 0.18, aa);
+  // Once a droplet is small enough on screen that the contour would take most
+  // of it, the inner and outer smoothsteps overlap and their difference stops
+  // being a line: it becomes a partial ink wash over the whole droplet, centre
+  // included. Foam mixed halfway to a navy ink is a mid grey, which is exactly
+  // what an early burst capture showed near the horizon — a scatter of grey
+  // gravel hanging over blue water. Below the resolvable size the ink is
+  // dropped entirely and the droplet is drawn as pure foam, which is the trade
+  // an inker makes when a shape gets too small to outline: you do not draw a
+  // thinner line, you stop drawing the line.
+  float inkVisible = 1.0 - smoothstep(edge * 0.22, edge * 0.5, inkW);
   float rim = mix(1.0, rimRaw, inkVisible);
 
   if (body <= 0.0) discard;
