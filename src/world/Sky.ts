@@ -255,15 +255,18 @@ void main() {
   float wobble = (dirNoise(d, 2.6) - 0.5) * 0.075 + (dirNoise(d, 7.3) - 0.5) * 0.028;
   vec3 col = bandedSky(t, wobble);
 
-  // Warm glow packed tightly around the sun, quantised into three steps.
+  // A warm collar around the sun, quantised into two steps.
   //
-  // A second, broader tier was tried and removed: quantising a wide radial
-  // falloff draws its own step boundaries as enormous concentric rings across
-  // the sky, which read as a lens artefact rather than as light. The tight
-  // tier is small enough that its steps fall inside the sun's own glare.
+  // Quantising a radial falloff draws its own step boundaries as concentric
+  // rings, and the only thing that decides whether those read as light or as a
+  // lens artefact is how big they are. An exponent of 30 over three steps put
+  // the outer ring 15 degrees off the sun — a 340 px disc at this field of
+  // view, plainly visible as a hard-edged grey circle pasted on the sky. At
+  // 150 over two steps the outer edge sits about 5 degrees out, inside the
+  // glare where a step belongs.
   float sd = max(dot(d, normalize(uSunDir)), 0.0);
-  float tight = floor(pow(sd, 30.0) * 3.0 + 0.15) / 3.0;
-  col = mix(col, ${glslVec3(PALETTE.sun)}, tight * 0.7);
+  float tight = floor(pow(sd, 150.0) * 2.0 + 0.2) / 2.0;
+  col = mix(col, ${glslVec3(PALETTE.sun)}, tight * 0.6);
 
   // A single hard haze band riding the horizon line, which gives the ocean
   // something to meet instead of fading into nothing. It wobbles with the same
