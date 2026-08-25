@@ -487,6 +487,19 @@ export interface BarStyle {
   fill: string;
   /** Unlit segment colour. */
   empty?: string;
+  /**
+   * Edge colour for UNLIT segments.
+   *
+   * Separate from `ink` because they have opposite jobs. A lit cell wants a
+   * dark contour so it reads as a drawn block; an unlit cell drawn in ink on an
+   * ink track has no contour at all, and the empty half of the meter dissolves
+   * into the panel. Measured on a captured frame, the boost bar's empty cells
+   * sat 20 to 40 levels off their own background over 800 px of screen — a
+   * quarter of the frame's width of UI that was, in practice, not drawn. A
+   * critic reading the same frame concluded the HUD was being occluded by the
+   * scene, which it cannot be: it is a DOM canvas over the WebGL one.
+   */
+  emptyLine?: string;
   ink?: string;
   /** Lean of each segment, px. */
   slant?: number;
@@ -555,7 +568,7 @@ export function segmentedBar(
     }
     if ((st.line ?? 2) > 0) {
       c.lineWidth = st.line ?? 2;
-      c.strokeStyle = ink;
+      c.strokeStyle = lit > 0 ? ink : (st.emptyLine ?? ink);
       c.stroke(path);
     }
   }

@@ -794,7 +794,14 @@ export class Hud {
       fill: boosting ? CSS.amber : full ? CSS.green : CSS.cyan,
       hot: boosting ? CSS.amber : CSS.green,
       hotFrom: boosting || full ? 1.1 : 0.75,
-      empty: 'rgba(22,41,74,0.55)',
+      // The empty state has to be a state, not an absence. At the old
+      // rgba(22,41,74,0.55) an unlit cell landed within 20 levels of the ink
+      // track under it and its ink contour was the track's own colour, so the
+      // uncharged part of an 800 px meter — a quarter of the screen's width —
+      // was effectively undrawn. The cells now have a slate body and their own
+      // lit edge, so the bar reads as eight empty boxes waiting to fill.
+      empty: 'rgba(46,78,116,0.92)',
+      emptyLine: '#4a7cb8',
       slant: barH * 0.34,
       gap: 4 * u,
       line: 2 * u,
