@@ -95,7 +95,32 @@ export function computeSmoothedNormals(geometry: BufferGeometry): BufferGeometry
       sy += accum[i * 3 + 1];
       sz += accum[i * 3 + 2];
     }
-    const len = Math.hypot(sx, sy, sz) || 1;
+    let len = Math.hypot(sx, sy, sz);
+    if (len < 1e-8) {
+      // No usable direction. This happens for vertices that no triangle
+      // references — the boat's deck carries four of them where the cockpit
+      // well's end caps collapse — and for vertices surrounded entirely by
+      // degenerate triangles, where the area-weighted sum cancels to zero.
+      //
+      // Leaving them as (0,0,0) is not harmless: `normalize()` on a zero vector
+      // is NaN in GLSL, the clip-space push sends the vertex to infinity, and
+      // the shell renders as long thin ink slivers streaking off the model.
+      // Falling back to the shading normal, then to +Y, keeps the shell closed.
+      const src = geometry.getAttribute('normal');
+      const i0 = indices[0];
+      if (src) {
+        sx = src.getX(i0);
+        sy = src.getY(i0);
+        sz = src.getZ(i0);
+        len = Math.hypot(sx, sy, sz);
+      }
+      if (len < 1e-8) {
+        sx = 0;
+        sy = 1;
+        sz = 0;
+        len = 1;
+      }
+    }
     sx /= len;
     sy /= len;
     sz /= len;

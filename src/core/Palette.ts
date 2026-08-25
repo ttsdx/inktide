@@ -42,7 +42,14 @@ export const PALETTE = {
   skyHigh: hex(0x2f8fd8),
   skyMid: hex(0x7fd0ee),
   skyHorizon: hex(0xffd98a),
-  skyHaze: hex(0xffeec4),
+  /**
+   * The band just above the horizon. Deliberately a pale cyan-white rather than
+   * the warm cream it started as: with two consecutive warm bands the bottom
+   * 13 degrees of sky rendered as a solid sand field sitting on top of the
+   * ocean, which read as a desert coastline in every frame. Warmth at the
+   * horizon is an accent, and it only works as a thin strip.
+   */
+  skyHaze: hex(0xd6eef8),
   sun: hex(0xfff8d4),
   sunCore: hex(0xffffff),
   cloudLit: hex(0xffffff),

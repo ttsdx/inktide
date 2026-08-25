@@ -1,4 +1,5 @@
 import { Color, Group, Object3D, Vector3 } from 'three';
+import { PALETTE } from './core/Palette.ts';
 import { Engine, type QualityTier } from './core/Engine.ts';
 import { Input } from './core/Input.ts';
 import { CameraRig, type CameraMode, type ChaseTarget } from './core/CameraRig.ts';
@@ -122,6 +123,14 @@ export class Game {
 
     // The ocean samples the copied scene depth for its waterline foam.
     this.engine.pipeline.onDepthReady = (tex, w, h) => this.ocean.setSceneDepth(tex, w, h);
+
+    // Distant water recedes into pale cyan, not into the sky's warm sand.
+    // Hazing the ocean towards `skyHorizon` is defensible in isolation — it is
+    // what the sky does at the same altitude — but the ocean occupies far more
+    // of the frame, so in practice it painted a wide desert strip above the
+    // waterline in every single shot. The sky keeps its warm horizon band; the
+    // water no longer borrows it.
+    (this.ocean.material.uniforms.uHorizon.value as Color).copy(PALETTE.waterHaze);
 
     this.effects.flashSink = (c, s) => this.engine.pipeline.flash(c, s);
     this.effects.shakeSink = (a, f) => this.rig.shake(a, f);

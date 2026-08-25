@@ -522,15 +522,19 @@ const WIDE_ENTRY_FRACTION = 0.5;
 /**
  * Rubber band authority, as a fraction of pace.
  *
- * The brief asked for "mild"; 8% was mild and left a 12.6 s spread, because the
- * hulls themselves are 11% apart on top speed and the band was being asked to
- * cover that as well as the driving. 13% is what actually holds the field
- * together. Swept: 8% gives a 12.6 s spread, 13% gives 8.9 s, 18% gives 9.0 s
- * on average but with a 7.5 s standard deviation — past about 15% the leader
- * eases so hard that it drops into the pack, starts chasing, and the whole field
- * oscillates. This sits below that.
+ * The brief asked for "mild". Mild is not enough, and the reason is arithmetic
+ * rather than taste: `Emberjack` and `Violet Reach` are 11% apart on top speed
+ * and the circuit is 42% flat out, so the hulls alone are worth about 3 s a lap.
+ * A band that only trims a few percent cannot cover that, and at 8% the race was
+ * decided on lap one every time.
+ *
+ * Swept over ten seeded races each: 13% leaves a 9.6 s spread, a 4.9 s winning
+ * margin and one lead change; 20% gives 4.6 s, 1.5 s and 3.3; 26% gives 9.6 lead
+ * changes but a 5.5 s standard deviation on the spread and a worst case of 22 s,
+ * because the leader eases so hard that it falls into the pack, starts chasing
+ * again, and the field oscillates. 20% is the knee.
  */
-const RUBBER_BAND_RANGE = 0.13;
+const RUBBER_BAND_RANGE = 0.2;
 /**
  * Gap, in band units, inside which the band does nothing at all.
  *
@@ -598,6 +602,21 @@ const RUBBER_BAND_SATURATION = 260;
 const AIR_TAU = 3.0;
 /** Ceiling on the derating, so a very rough sea cannot stop the AI racing. */
 const AIR_GRIP_LOSS_MAX = 0.42;
+
+/**
+ * Seconds the drift button is held released in order to fire a boost, before
+ * the slide is picked back up.
+ *
+ * The physics puts a 0.35 s cooldown on the boost after a release, so this has
+ * to clear it; much longer and the hull re-sticks and the second slide has to be
+ * re-initiated from scratch, which costs more than the boost is worth.
+ */
+const BOOST_RELEASE_HOLD = 0.42;
+/**
+ * Charge at which the meter counts as full. The physics clamps `boostCharge` to
+ * 1, so anything at or above this is earning nothing by being held.
+ */
+const BOOST_SATURATED = 0.97;
 
 /**
  * Top-speed fraction given up per corridor half-width of `excess` while off the
@@ -684,6 +703,9 @@ export class AIController {
   /** Fraction of the last few seconds spent out of the water. See AIR_TAU. */
   private airFraction = 0;
 
+  /** Counts down while the drift button is deliberately released to fire a boost. */
+  private releaseTimer = 0;
+
   /**
    * Grip/yaw scale for the hull this controller is driving. Latched on the first
    * update rather than in the constructor, because the controller is handed a
@@ -731,6 +753,7 @@ export class AIController {
     this.launchLaneTimer = -1;
     this.bandFiltered = 0;
     this.airFraction = 0;
+    this.releaseTimer = 0;
   }
 
   update(
@@ -1223,10 +1246,39 @@ export class AIController {
     // the hull adds 62% to its yaw authority in the physics. Only worth it while
     // there is enough speed for the drift to engage at all.
     if (spun && speed > topSpeed * 0.3) wantDrift = true;
-    const drift = this.mistake === 'botchedDrift' ? true : wantDrift;
+    let drift = this.mistake === 'botchedDrift' ? true : wantDrift;
 
-    // Cash the boost in on the exit, not in the corner: wait until the track
-    // ahead is straight enough that the extra speed can be used.
+    // CASHING THE CHARGE IN
+    //
+    // `BoatCommand` has no boost channel. The physics fires the boost when the
+    // drift button is *released* with charge banked, and the charge saturates at
+    // 1.0 — so the only thing that decides how much boost a racer gets is when
+    // it lets go of the slide, and holding a full meter through the rest of a
+    // corner earns exactly nothing. The AI was doing precisely that: one slide
+    // per corner, one boost per corner, and a meter that had been pegged for two
+    // seconds by the time it was cashed.
+    //
+    // So: when the meter is full, let go for long enough for the physics to
+    // register a release, then pick the slide back up. It is what a player does
+    // — flick, catch, flick again — and it turns The Pin from one boost into
+    // two.
+    //
+    // Only at saturation, though. Cashing early was measured and is worse: the
+    // boost is a thrust multiplier, `boostTime` is `0.55 + charge * 1.35`, and
+    // the 0.42 s with the button released earns no charge at all, so releasing at
+    // half a meter buys 1.29 s of boost per 0.81 s of cycle where waiting for a
+    // full one buys 1.90 s per 1.13 s. Sitting on a *pegged* meter, by contrast,
+    // is pure waste, and that is what the AI had been doing.
+    const cashThreshold = Math.max(P.boostChargeThreshold, BOOST_SATURATED);
+    if (this.releaseTimer > 0) {
+      this.releaseTimer -= dt;
+      drift = false;
+    } else if (drift && state.boostCharge >= cashThreshold && state.boostTime <= 0) {
+      this.releaseTimer = BOOST_RELEASE_HOLD;
+      drift = false;
+    }
+
+    // Advisory, for anything that owns a boost button of its own.
     this.wantsBoost =
       state.boostCharge >= P.boostChargeThreshold * (1 - chase * 0.35) &&
       state.boostTime <= 0 &&
