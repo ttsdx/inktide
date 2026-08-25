@@ -295,6 +295,8 @@ function applyShot({ shot, from }) {
       // Framed relative to the boat's own heading, so a shot stays composed
       // wherever on the circuit the racer has got to by the target time.
       h.frameBoat(c.index ?? 0, c.yaw ?? 0, c.pitch ?? 0.2, c.distance ?? 8, c.lookHeight ?? 1.0);
+    } else if (c.mode === 'prop') {
+      h.frameProp(c.kind ?? 'buoy', c.index ?? 0, c.yaw ?? 0, c.pitch ?? 0, c.distance ?? 6, c.lookHeight ?? 0);
     } else h.setCamera(c.mode);
   }
 }

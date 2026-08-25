@@ -211,6 +211,16 @@ export class BuoyField {
     this.focus.copy(position);
   }
 
+  /**
+   * Current world position of one buoy: its fixed XZ and its smoothed ride
+   * height. The capture harness needs this to frame a waterline close-up, which
+   * is the only way to judge whether the float is actually sitting *in* the
+   * water rather than hovering a few centimetres over it.
+   */
+  instancePosition(i: number, out: Vector3): Vector3 {
+    return out.set(this.baseX[i], this.height[i], this.baseZ[i]);
+  }
+
   update(ctx: FrameContext): void {
     this.frame++;
     const near2 = NEAR_RADIUS * NEAR_RADIUS;

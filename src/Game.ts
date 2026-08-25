@@ -862,6 +862,45 @@ export class Game {
       this.rig.setFree(eye, new Vector3(s.position.x, s.position.y + lookHeight, s.position.z));
     },
 
+    /**
+     * Frame a piece of course furniture the same way `frameBoat` frames a
+     * racer. Props float on the same wave field the boats do, and whether they
+     * sit convincingly *in* the surface can only be judged from a close, low
+     * angle at the waterline — from the chase cam every float looks fine.
+     */
+    frameProp: (
+      kind: 'gate' | 'buoy',
+      index: number,
+      yaw: number,
+      pitch: number,
+      distance: number,
+      lookHeight = 0,
+    ): void => {
+      const target = new Vector3();
+      if (kind === 'gate') {
+        const gate = this.gates?.gates[index];
+        if (!gate) return;
+        // The pylon base, not the gate centre: the centre is thirty metres of
+        // empty air between the two things that actually touch the water.
+        target.set(
+          gate.centre.x + gate.across.x * gate.halfWidth,
+          gate.group.position.y,
+          gate.centre.z + gate.across.z * gate.halfWidth,
+        );
+      } else {
+        if (!this.buoys || index >= this.buoys.count) return;
+        this.buoys.instancePosition(index, target);
+      }
+
+      const cp = Math.cos(pitch);
+      const eye = new Vector3(
+        target.x + Math.sin(yaw) * distance * cp,
+        target.y + Math.sin(pitch) * distance + lookHeight,
+        target.z + Math.cos(yaw) * distance * cp,
+      );
+      this.rig.setFree(eye, new Vector3(target.x, target.y + lookHeight, target.z));
+    },
+
     setOrbit: (angle: number, radius: number, height: number): void => {
       this.rig.mode = 'orbit';
       this.rig.orbitAngle = angle;
