@@ -363,6 +363,24 @@ float cloudDensity(vec3 d, vec2 bias) {
   // Project the view ray onto a plane 1 unit above the camera. Rays near the
   // horizon stretch enormously, which is exactly the perspective a real cloud
   // deck has, and it keeps clouds out of the water.
+  //
+  // WHY THE ZENITH IS EMPTY, AND WHAT DOES NOT FIX IT.
+  //
+  // This projection necessarily collapses overhead: directly above you, you are
+  // looking at one point of the deck, so d.xz goes to zero and an upward frame
+  // samples a patch of the noise about 0.05 across. A capture looking up is one
+  // flat tone with nothing in it.
+  //
+  // Reparameterising near the zenith — blending towards the ray direction
+  // scaled up — was tried at 13x and 46x and made it worse, not better. The
+  // reason is that FBM's amplitude falls with frequency: sampling further up
+  // the octaves puts the field deep in its small-amplitude range, where it
+  // almost never crosses the coverage threshold, so the zenith went from one
+  // flat tone to a scatter of specks. Rescaling the input cannot work here.
+  //
+  // What would: a second cloud layer for the upper dome with its own noise
+  // field and its own coverage, rather than trying to make one field serve a
+  // projection that is singular at one end of it.
   float y = max(d.y, 0.035);
   vec2 uv = d.xz / y * 0.115 + bias;
   uv += vec2(uTime * 0.0042, uTime * 0.0017);
