@@ -146,13 +146,16 @@ export class Boat {
     // Painted in the foam white rather than the racer's own dark: the number
     // has to hold its own value against a saturated hull whatever colour that
     // hull is, and picking a second tone per racer would give four different
-    // answers to a question that has one. The ramp is tinted to the paint so
-    // the number's shadow side stays in the boat's own hue family instead of
-    // going grey.
+    // answers to a question that has one.
+    //
+    // No `rampTint`, for the reason two materials above already give and which
+    // this one got wrong first time round: the cel shader multiplies the ramp
+    // by the base colour, so tinting the ramp as well squares it. Tinted to the
+    // racer's dark, a white numeral came back as a dark red rectangle barely
+    // separable from the panel it was painted on.
     const decal = this.material({
       color: PALETTE.foam,
       vertexColors: true,
-      rampTint: PALETTE.racerDark[ci],
       rimColor: PALETTE.uiCyan,
       rimStrength: 0.3,
       specStrength: 0.34,

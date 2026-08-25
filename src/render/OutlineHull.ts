@@ -203,23 +203,30 @@ export function attachOutline(mesh: Mesh, opts: OutlineOptions = {}): Mesh {
   // recession at the horizon and is otherwise constant.
   mat.uniforms.uDistanceTaper.value = opts.distanceTaper ?? 0.9;
 
-  // An ink line may never be more than a third of its own subject's thinnest
-  // dimension. Measured on the geometry's bounding box rather than its
-  // bounding sphere, because the case this exists for — a gate's arch tube — is
-  // long in two axes and thin in the third, so a sphere would report it as a
-  // large object and clamp nothing.
+  // An ink line may never be more than a third of its own subject's smaller
+  // ON-SCREEN dimension. Measured on the geometry's bounding box rather than
+  // its bounding sphere, because the case this exists for — a gate's arch tube
+  // — is long in two axes and thin in the third, so a sphere would report it as
+  // a large object and clamp nothing.
+  //
+  // The MIDDLE axis, not the smallest. A shape's thickness is not what its
+  // outline has to fit inside: a flat decal is a few millimetres thick and tens
+  // of centimetres across, and clamping to the thickness gave it a sub-pixel
+  // line, so the boats' race numbers arrived with no contour at all in a game
+  // where everything else is inked. Taking the second-smallest axis still
+  // catches the arch — long, long, thin — because its middle axis is its tube
+  // diameter, while leaving a plate free to carry the line its face deserves.
   geo.computeBoundingBox();
   const bb = geo.boundingBox;
   if (bb) {
-    const sx = bb.max.x - bb.min.x;
-    const sy = bb.max.y - bb.min.y;
-    const sz = bb.max.z - bb.min.z;
-    const thinnest = Math.min(sx, sy, sz);
+    const dims = [bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z].sort(
+      (a, b) => a - b,
+    );
     // Scale into world units: a mesh may be nested under scaled parents.
     mesh.updateWorldMatrix(true, false);
     _scale.setFromMatrixScale(mesh.matrixWorld);
-    const worldThinnest = thinnest * Math.max(_scale.x, _scale.y, _scale.z);
-    mat.uniforms.uMaxPushWorld.value = Math.max(worldThinnest * 0.34, 1e-4);
+    const worldMiddle = dims[1] * Math.max(_scale.x, _scale.y, _scale.z);
+    mat.uniforms.uMaxPushWorld.value = Math.max(worldMiddle * 0.34, 1e-4);
   }
   registry.add(mat);
   applyViewport(mat);

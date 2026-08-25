@@ -82,7 +82,7 @@ const DIGITS: Record<number, readonly string[]> = {
  * the two `v` values inset the numeral from the wall's top and bottom chamfers
  * so its ink never collides with the panel's own edges.
  */
-const PANEL = { z0: -1.05, z1: 0.35, v0: 0.2, v1: 0.86 };
+const PANEL = { z0: -1.2, z1: 0.5, v0: 0.08, v1: 1.02 };
 
 interface Builder {
   pos: number[];
