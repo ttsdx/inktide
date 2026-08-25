@@ -999,6 +999,30 @@ export class Game {
      * Note that `Ocean.update` rewrites the wave uniforms from `oceanParams`
      * every frame, so only the ones it leaves alone can be held this way.
      */
+    /**
+     * Hide one visual layer. Diagnostic only.
+     *
+     * Water measures 0.84 to 0.96 mean saturation in the frames that contain
+     * nothing but ocean and 0.27 to 0.42 in the frames that contain gameplay,
+     * with the same shader and the same palette. Something drawn in the second
+     * set is covering it. Turning candidates off one at a time is the only way
+     * to find out which, and it has to be one process per variant because
+     * anything else has already been shown to carry state between samples.
+     */
+    setLayerVisible: (layer: string, on: boolean): void => {
+      const targets: Record<string, { visible: boolean } | null | undefined> = {
+        spray: this.spray?.root,
+        ribbon: this.racingLine?.mesh,
+        ribbonGlow: this.racingLine?.glow,
+        gates: this.gates?.root,
+        buoys: this.buoys?.root,
+        racers: this.raceRoot,
+      };
+      const t = targets[layer];
+      if (t) t.visible = on;
+      if (layer === 'wake') this.ocean.setWakeField(null, 0, 0, 260);
+    },
+
     setOceanUniform: (name: string, value: number): void => {
       const u = this.ocean.material.uniforms[name];
       if (u) u.value = value;
