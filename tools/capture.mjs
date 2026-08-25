@@ -188,7 +188,6 @@ async function main() {
   });
 
   const results = [];
-  let lastTime = 0;
   /**
    * Whether a `setup` block has run since the page was last loaded.
    *
@@ -207,10 +206,11 @@ async function main() {
    * So: a shot that uses setup gets a clean page. It costs a reload only in the
    * runs that need it, and the canonical shot list does not.
    */
-  let dirty = false;
-
   const reload = async () => {
-    await page.reload({ waitUntil: 'domcontentloaded' });
+    // The default navigation timeout is 30 s, which a reload does not always
+    // make under a software rasteriser once a WebGL context has to be torn down
+    // and rebuilt. Use the run's own timeout, as the initial load does.
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: args.timeout });
     await page.waitForFunction(
       () => Boolean(window.__INKTIDE__ && window.__INKTIDE__.harness.ready()),
       null,
@@ -220,22 +220,27 @@ async function main() {
       document.getElementById('boot')?.remove();
       window.__INKTIDE__.harness.pause();
     });
-    lastTime = 0;
-    dirty = false;
   };
 
+  // EVERY shot replays from zero on a clean page.
+  //
+  // Fast-forwarding from wherever the previous shot left off made a shot's
+  // content depend on which other shots ran before it, because the previous
+  // shot's `input` was held for the whole seek. hud-03 at t=36 reached one part
+  // of the circuit when the run also contained the drift shots and a different
+  // part when it did not — same id, same time, same seed, different frame.
+  //
+  // That is the difference between a shot list and a set of reproducible
+  // measurements, and it quietly undermined several comparisons in this project
+  // before it was noticed. Stepping is simulation-only and cheap; the reload is
+  // the cost, and correctness is worth it.
   for (const shot of shots) {
-    if (dirty) await reload();
+    await reload();
     const started = Date.now();
     process.stdout.write(`  ${shot.id.padEnd(30)} `);
 
     try {
-      // Re-seek from zero when a shot needs an earlier moment than the last.
-      if (shot.time < lastTime) await reload();
-
-      await page.evaluate(applyShot, { shot, from: lastTime });
-      lastTime = shot.time;
-      if (shot.setup) dirty = true;
+      await page.evaluate(applyShot, { shot, from: 0 });
 
       // Render a few real frames after the state change: the first compiles any
       // shader variant this angle needs, the rest let camera springs and the

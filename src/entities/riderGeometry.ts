@@ -597,10 +597,18 @@ export function buildThumb(side: number): BufferGeometry {
   const s = Math.sign(side) || 1;
   return loftSections(
     [
-      { y: -0.016, w: 0.020, d: 0.024, x: -s * 0.040, z: 0.020, round: 2.6 },
-      { y: -0.034, w: 0.023, d: 0.027, x: -s * 0.050, z: 0.034, round: 2.8, hard: true },
-      { y: -0.056, w: 0.021, d: 0.025, x: -s * 0.052, z: 0.046, round: 2.6 },
-      { y: -0.070, w: 0.014, d: 0.018, x: -s * 0.048, z: 0.052, round: 2.2 },
+      // Set OUTBOARD rather than forward, so it clears the fist's own
+      // half-width and breaks the silhouette from any angle.
+      //
+      // Laid along the bar it was invisible from the chase and cockpit cameras,
+      // which look straight down the arm at the back of the fist — from there a
+      // correctly modelled hand is a blunt cap with an ink ring round it, which
+      // is exactly what "the arms end in flat angular chamfers" describes. A
+      // hand only reads end-on if something interrupts its outline.
+      { y: -0.020, w: 0.020, d: 0.024, x: -s * 0.046, z: 0.006, round: 2.6 },
+      { y: -0.036, w: 0.023, d: 0.027, x: -s * 0.060, z: 0.014, round: 2.8, hard: true },
+      { y: -0.056, w: 0.021, d: 0.025, x: -s * 0.068, z: 0.024, round: 2.6 },
+      { y: -0.068, w: 0.014, d: 0.018, x: -s * 0.066, z: 0.030, round: 2.2 },
     ],
     5,
   );
