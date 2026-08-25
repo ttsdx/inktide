@@ -327,15 +327,15 @@ export const SHOTS = [
     group: 'hero',
     time: 58.0,
     input: CRUISE,
-    camera: boat(2.6, 0.04, 13, 1.0),
-    description: 'Low behind the pack, near the waterline.',
+    camera: boat(2.55, 0.26, 7.0, 1.45),
+    description: 'Close behind the boat. The hero product angle in motion.',
   },
   {
     id: 'hero-03-slide',
     group: 'hero',
     time: 64.0,
     input: SLIDE,
-    camera: boat(1.7, 0.10, 9, 1.0),
+    camera: boat(1.55, 0.28, 6.6, 1.4),
     description: 'Committed powerslide with spray and a spreading wake.',
   },
 ];

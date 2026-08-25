@@ -1,0 +1,28 @@
+import { chromium } from '@playwright/test';
+const b = await chromium.launch({args:['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--no-sandbox','--disable-dev-shm-usage']});
+const p = await (await b.newContext({viewport:{width:500,height:300}})).newPage();
+p.on('pageerror',e=>console.log('ERR',e.message));
+await p.goto('http://127.0.0.1:43140/?harness=1&quality=medium&adaptive=0',{waitUntil:'domcontentloaded'});
+await p.waitForFunction(()=>window.__INKTIDE__?.harness.ready(),null,{timeout:180000});
+await p.evaluate(()=>{document.getElementById('boot')?.remove();window.__INKTIDE__.harness.pause();});
+const r = await p.evaluate(()=>{
+  const g=window.__INKTIDE__,h=g.harness;
+  h.setInput({throttle:1,steer:1,drift:true});
+  h.step(60*58,1/60,false);
+  const out={};
+  const pl=g.player.physics, cam=g.engine.camera;
+  out.boatBefore = pl.position.toArray().map(v=>+v.toFixed(1));
+  h.frameBoat(0, 2.6, 0.04, 13, 1.0);
+  out.camAfterFrame = cam.position.toArray().map(v=>+v.toFixed(1));
+  out.distAfterFrame = +cam.position.distanceTo(pl.position).toFixed(2);
+  out.rigMode = g.rig.mode;
+  out.freePos = g.rig.freePosition.toArray().map(v=>+v.toFixed(1));
+  h.renderFrames(3);
+  out.camAfterRender = cam.position.toArray().map(v=>+v.toFixed(1));
+  out.boatAfterRender = pl.position.toArray().map(v=>+v.toFixed(1));
+  out.distAfterRender = +cam.position.distanceTo(pl.position).toFixed(2);
+  out.rigModeAfter = g.rig.mode;
+  return out;
+});
+console.log(JSON.stringify(r,null,2));
+await b.close();

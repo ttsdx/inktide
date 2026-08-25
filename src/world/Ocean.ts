@@ -1216,7 +1216,19 @@ void main() {
   float specGate = fixedStep(0.03, specRaw, 0.02);
 
   float bigGlint;
-  float glint = glitter(p, uTime, uSparkleDensity, bigGlint);
+  // Scale the glint lattice with distance so a sparkle stays roughly the same
+  // size on screen.
+  //
+  // The lattice was fixed in world units, so a cell three metres from the
+  // camera covered a large part of the frame: a hero capture came back with two
+  // 200 px four-pointed stars lying on the near water, reading as stray decals
+  // rather than as light on the surface. Anime light-glitter is a small,
+  // uniform, punctuation-sized mark wherever it lands, which means its size
+  // belongs in screen space, not world space. Quantised into octaves so the
+  // lattice steps rather than sliding continuously under the camera, which
+  // would make individual glints crawl.
+  float glintOctave = exp2(floor(log2(max(vViewDist, 4.0) / 12.0)));
+  float glint = glitter(p, uTime, uSparkleDensity / glintOctave, bigGlint);
   float glitterMask = (glint * 0.6 + bigGlint * 1.0) * specGate * uSparkleAmount * detail;
   col += glitterMask * uSunTint * 0.85 * (1.0 - foamEdge);
 
