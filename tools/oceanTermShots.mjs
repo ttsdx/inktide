@@ -24,3 +24,17 @@ export const SHOTS = [
                         setPassUniform: ['composite', 'uBloomStrength', 0] },
      'The body again with bloom off. If the green excess goes, bloom owns it.'),
 ];
+
+// Does the floor respond at all? 0.06 measured byte-identical to no floor,
+// which a 40% cut to the spill cannot be, so either the bloom values are far
+// larger than assumed or the term is not doing what it reads as.
+for (const f of [0.15, 0.5, 2.0]) {
+  SHOTS.push({
+    id: `dbg-floor-${String(f).replace('.', 'p')}`,
+    group: 'dbg',
+    time: 12.0,
+    camera: cam,
+    setup: { setOceanUniform: ['uDebug', 4], setPassUniform: ['composite', 'uBloomFloor', f] },
+    description: `Band body with the bloom floor at ${f}.`,
+  });
+}
