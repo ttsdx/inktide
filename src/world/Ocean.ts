@@ -1101,20 +1101,35 @@ void main() {
     vec2 fwd = normalize(B.yz + vec2(1e-5, 0.0));
     float along = dot(d, fwd);
     float across = dot(d, vec2(-fwd.y, fwd.x));
-    float stretch = along > 0.0 ? 1.0 : 0.42;
+    // The teardrop is scaled to the actual hull: r = 1 lands just outboard of
+    // the chine and just ahead of the bow, and trails a long way aft where the
+    // wake starts. Getting this to match matters because the collar below is
+    // pinned to r = 1.
+    float stretch = along > 0.0 ? 0.72 : 0.40;
     vec2 e = vec2(along * stretch, across * 1.35);
     float r = length(e) / max(A.w, 0.1);
 
     // Vertical falloff: a boat 4 m in the air should not foam the water.
     float vertical = 1.0 - smoothstep(0.6, 3.2, abs(A.y - vWorldPos.y));
 
-    // The radius is perturbed by the shared breakup noise, so the ring tears
+    // A COLLAR, not a disc.
+    //
+    // This was a filled ellipse at full strength in the middle falling to zero
+    // at the rim, which puts all of its foam underneath the boat where the
+    // hull occludes it and leaves only the weakest fringe visible. The whole
+    // point of hull foam is the line where the hull enters the water, so the
+    // strong part belongs exactly there, at r = 1, falling away on both sides.
+    //
+    // Both edges are perturbed by the shared breakup noise so the collar tears
     // like every other foam source. Without it the hull's contact foam is the
     // one perfectly smooth ellipse in a frame of hand-torn shapes, and a
     // no-wake capture showed it doing exactly that — a clean white lozenge
     // sitting on the water like a sticker.
-    float ring = (1.0 - smoothstep(0.5, 1.1, r + fn * 0.22)) * B.x * vertical;
-    contact = max(contact, ring);
+    float collar = 1.0 - smoothstep(0.0, 0.34, abs(r - 1.0) + fn * 0.16);
+    // A weaker wash inside the collar: the water the hull is pushing aside is
+    // disturbed too, it just is not breaking.
+    float inside = (1.0 - smoothstep(0.5, 1.0, r)) * 0.42;
+    contact = max(contact, max(collar, inside) * B.x * vertical);
   }
 
   // -----------------------------------------------------------------------
@@ -1133,8 +1148,17 @@ void main() {
     float sceneDepth = texture(uSceneDepth, suv).w * uCameraFar;
     float ourDepth = -(viewMatrix * vec4(vWorldPos, 1.0)).z;
     // sceneDepth of 0 means nothing was drawn there (open sky/water).
-    if (sceneDepth > 0.001 && sceneDepth < ourDepth) {
-      float diff = ourDepth - sceneDepth;
+    //
+    // The test is that the hull is BEHIND this water pixel and close to it,
+    // which is the definition of a pixel of water lying over something
+    // submerged. It used to be written the other way round — hull in front of
+    // the water — and that condition is unreachable: a pixel where the hull is
+    // in front is a pixel where the hull was drawn and the water fragment lost
+    // the depth test, so it never runs this code at all. The term had been
+    // dead since it was written, which is why no hull, buoy or gate collar in
+    // the game has ever had a waterline.
+    if (sceneDepth > 0.001 && sceneDepth > ourDepth) {
+      float diff = sceneDepth - ourDepth;
       depthFoam = (1.0 - smoothstep(0.0, 1.25, diff));
     }
   }

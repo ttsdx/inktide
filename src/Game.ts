@@ -469,10 +469,17 @@ export class Game {
         });
       }
 
+      // The radius is the hull's own half-beam plus a little, because the
+      // ocean's contact term now draws its collar at exactly one radius rather
+      // than filling the ellipse; if this does not match the boat, the foam
+      // detaches from it. The strength floor is well clear of the foam
+      // threshold so a boat at rest still has a waterline — at the old 0.35 the
+      // breakup noise took an idle hull's collar below the tear threshold and
+      // it had none at all.
       this.contacts.push({
         position: s.position,
-        radius: 2.6,
-        strength: Math.min(1, 0.35 + s.speed / 26),
+        radius: 1.9,
+        strength: Math.min(1, 0.62 + s.speed / 34),
         forwardX: s.forward.x,
         forwardZ: s.forward.z,
       });
