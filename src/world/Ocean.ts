@@ -981,6 +981,8 @@ void main() {
   col = mix(col, uMid, b1);
   col = mix(col, uShallow, b2);
   col = mix(col, uCrest, b3);
+  // Kept for the debug taps: the four-tone body before anything is layered on.
+  vec3 bandCol = col;
 
   // -----------------------------------------------------------------------
   // 2. THE SUN PLANE
@@ -1291,6 +1293,9 @@ void main() {
   vec3 foamDeep = mix(uCrest, uFoamShade, 0.55);
   vec3 foamCol = foamStep < 0.5 ? foamDeep : (foamStep < 1.5 ? uFoamShade : uFoam);
 
+  // Everything the body has picked up before the foam is composited over it.
+  vec3 preFoamCol = col;
+
   col = mix(col, uCrest * 1.15, clamp(foamHalo - foamEdge, 0.0, 1.0) * 0.75);
   col = mix(col, foamCol, foamEdge);
 
@@ -1466,7 +1471,16 @@ void main() {
       pathA * 0.42 * pathFade + pathB * 0.7 * pathFade,
       glitterMask,
       1.0);
-    else                   outColor = vec4(contour, b2, sunPlane * 0.82, 1.0);
+    else if (uDebug < 3.5) outColor = vec4(contour, b2, sunPlane * 0.82, 1.0);
+    // 4 and 5 output COLOURS rather than masks, which the three modes above
+    // all do. Chasing why the water's darkest tone renders as a saturated teal
+    // 36 degrees off waterDeep, the masks could say which terms were firing but
+    // not what colour anything was, and inverting the grade analytically only
+    // narrowed it to "not any one of these terms alone". Being able to shoot
+    // the band ramp on its own and subtract it from the finished frame answers
+    // it in one capture instead of a round per candidate.
+    else if (uDebug < 4.5) outColor = vec4(bandCol, 1.0);
+    else                   outColor = vec4(preFoamCol, 1.0);
   }
 
   // The ocean writes into the edge buffer with a heavily flattened normal.
