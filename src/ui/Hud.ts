@@ -411,17 +411,31 @@ export class Hud {
       stripeWidth: 9 * u,
     });
     const place = pp?.position ?? 1;
-    const numSize = 62 * u;
-    drawText(c, `${place}`, px + 24 * u, py + 20 * u, {
+    const numSize = 54 * u;
+    // White body, racer-coloured contour, and clear of the stripe.
+    //
+    // It was drawn in the racer's own colour starting 24 units in, which put it
+    // over the 9-unit stripe of the same colour and over the panel's top-left
+    // chamfer. The result was the single most important number on the HUD
+    // rendered red on red down its left side, spilling past the panel edge onto
+    // the sky, with a notch bitten out of its stem by the chamfer.
+    //
+    // Inverting it keeps the colour coding — the contour still says which racer
+    // this is, and so does the stripe — while the number itself is the most
+    // legible thing in the cluster, which is what it should have been.
+    drawText(c, `${place}`, px + 42 * u, py + 20 * u, {
       size: numSize,
-      fill: color,
+      fill: CSS.foam,
+      ink: color,
       weight: 0.19,
-      outline: 0.11,
+      // Enough contour to carry the racer's colour, not so much that the
+      // numeral reads as a coloured blob with a hole in it. At 0.16 it did.
+      outline: 0.095,
       shadow: 3 * u,
       slant: 0.24,
     });
     const numW = measureText(`${place}`, numSize);
-    drawText(c, ordinalSuffix(place), px + 38 * u + numW, py + 26 * u, {
+    drawText(c, ordinalSuffix(place), px + 56 * u + numW, py + 26 * u, {
       size: 22 * u,
       fill: CSS.foam,
       weight: 0.22,
