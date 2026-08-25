@@ -136,7 +136,7 @@ export class Boat {
     // Fine ink on the small parts. A 2.6 px line is right for a 5 m hull and
     // completely swallows a 7 cm rudder blade, which at race distance turns
     // into a black smudge behind the boat.
-    const fine = { outline: { widthPx: 1.8 } };
+    const fine = { outline: { widthPx: 3.4 } };
     this.part(buildFinGeometry(), paint, this.visual, 'fin', fine);
     this.part(buildEngineGeometry(), trim, this.visual, 'engine', fine);
     this.part(buildHandlebarGeometry(), trim, this.visual, 'handlebar', fine);
@@ -163,7 +163,14 @@ export class Boat {
     // Ink shells first, because they have to inherit `userData.outline`, then
     // the glow, because it must not get one: an emissive plate with a black
     // outline around it stops reading as light and starts reading as a sticker.
-    this.outlines = outlineHierarchy(this.root, { widthPx: 2.6 });
+    // 5.2 px against a 1080-tall framebuffer. The previous 2.6 measured about
+    // two device pixels on the hull silhouette, in a deep navy against pale
+    // water — a contour that technically existed and could not be seen. A
+    // captured frame at 3.4 m showed the boat defined purely by the colour
+    // boundary between its crimson and the water behind it, which is the one
+    // thing a cel-shaded game cannot do. The hero object carries the heaviest
+    // line in the frame; everything else is ranked below it.
+    this.outlines = outlineHierarchy(this.root, { widthPx: 5.2, distanceTaper: 0.95 });
 
     this.glowMaterial = makeGlowMaterial(PALETTE.uiCyan, 0.25, 1);
     this.materials.push(this.glowMaterial);

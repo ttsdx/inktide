@@ -179,7 +179,10 @@ export class Gate {
     this.banner.renderOrder = 4;
     this.group.add(this.banner);
 
-    outlineHierarchy(this.group, { widthPx: 2.6, distanceTaper: 0.55 });
+    // Props sit below the racers in the ink hierarchy. A captured frame
+    // measured a 14 px stroke on a near gate — wider than the tube it was
+    // outlining — against no line at all on the boats.
+    outlineHierarchy(this.group, { widthPx: 2.2, distanceTaper: 0.9 });
     this.group.traverse((o) => {
       if (!o.userData.noOutline) o.layers.set(LAYER_OPAQUE);
     });

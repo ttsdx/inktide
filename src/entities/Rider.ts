@@ -377,7 +377,11 @@ export class Rider {
     // finer than the boat's or the character turns into a blot at mid distance.
     // The taper is pushed above the default for the same reason: a constant
     // 2 px line on something this small still swallows it in the pack.
-    this.outlines = outlineHierarchy(this.root, { widthPx: 2.0, distanceTaper: 0.5 });
+    // Heavier than the boat's per-part minimum: in every reference the
+    // character carries the strongest line in the frame, because that is how
+    // the player's eye is put on the player. A taper of 0.5 also meant the
+    // rider lost its contour entirely at pack distance.
+    this.outlines = outlineHierarchy(this.root, { widthPx: 4.4, distanceTaper: 0.92 });
 
     this.root.traverse((o) => {
       o.layers.set(LAYER_OPAQUE);

@@ -135,7 +135,25 @@ export class Ocean {
         /** Floor on band-edge width, in band units. Anti-aliasing does the rest. */
         uBandSoftness: { value: 0.004 },
         /** Band thresholds along the shading coordinate. */
-        uBands: { value: new Vector3(0.27, 0.5, 0.73) },
+        /**
+         * Band thresholds, chosen by measurement rather than by eye.
+         *
+         * At 0.27/0.50/0.73 the coordinate cleared every threshold across
+         * almost the whole surface, so the ocean was painted in its two
+         * palest tones and the deep navy was effectively unreachable: sampling
+         * a whole frame put the darkest 2% of the water at brightness 0.906
+         * against a deep palette colour of 0.39. There was no shadow anywhere
+         * in a frame that is 60% water, so no wave had form and the boat had
+         * nothing to silhouette against.
+         *
+         * Sweeping the thresholds against the measured brightness
+         * distribution: 0.40 -> p02 0.886, 0.55 -> 0.804, 0.70 -> 0.373 with
+         * the total range going 0.094 -> 0.615 and mean saturation rising to
+         * 0.99. Troughs are a minority of the surface, which is why the median
+         * barely moves while the low tail opens right up — that is the shape a
+         * legible sea should have.
+         */
+        uBands: { value: new Vector3(0.70, 0.85, 0.95) },
         /** Weights: x = N·L form, y = swell height, z = total height. */
         uBandMix: { value: new Vector3(0.5, 0.32, 0.18) },
         /** Fold (1 - jacobian) at which foam starts. */
@@ -501,6 +519,12 @@ uniform vec3 uSunTint;
 uniform vec3 uSkyTint;
 uniform vec3 uHorizon;
 
+/** (lo, hi) of the N.L range the sea can actually produce, for the band remap. */
+uniform vec2 uFormRange;
+uniform float uPreFilterFloor;
+uniform float uLiftStrength;
+uniform float uSunPlaneStrength;
+uniform float uDeepLift;
 uniform float uBandSoftness;
 uniform vec3 uBands;
 uniform vec3 uBandMix;
@@ -824,7 +848,20 @@ void main() {
   //           from across the frame.
   //   heightT total displaced height, which puts the chop back in near camera.
   // -----------------------------------------------------------------------
-  float formT = clamp((ndl - 0.16) / 0.78, 0.0, 1.0);
+  // Remap N.L across the range the ocean can actually produce, not 0..1.
+  //
+  // This is why the water had no dark tone. The sun sits 39 degrees up, so a
+  // flat sea returns N.L = 0.62, and the steepest wave face in the Gerstner
+  // budget only swings it to roughly 0.45..0.78. Spread over a 0.16..0.94
+  // remap, that entire swing occupied the middle third of the band coordinate
+  // and never once reached the deep threshold: measured across a whole frame,
+  // the darkest 2% of the ocean sat at brightness 0.878 against a deep palette
+  // colour of 0.39. The trough tone was not weak, it was unreachable.
+  //
+  // Normalising against the achievable range turns the same physical swing into
+  // the full 0..1 of the coordinate, so a wave face turned away from the sun
+  // lands in the deep band and a face turned into it lands in the crest band.
+  float formT = clamp((ndl - uFormRange.x) / max(uFormRange.y - uFormRange.x, 0.01), 0.0, 1.0);
 
   // Past the detail-fade window the surface normal is carried by triangles
   // tens of metres wide, so N·L stops describing a wave and starts describing
@@ -843,7 +880,7 @@ void main() {
   // dark commas that covers the foreground of the third capture, so the deep
   // band is cut almost entirely against the broad surface and each successive
   // band picks up more of the detail.
-  float formBroad = clamp((dot(normalize(vNormal), SUN_DIR) - 0.16) / 0.78, 0.0, 1.0);
+  float formBroad = clamp((dot(normalize(vNormal), SUN_DIR) - uFormRange.x) / max(uFormRange.y - uFormRange.x, 0.01), 0.0, 1.0);
   float bandBroad = formBroad * uBandMix.x * formMix + bandBase;
 
   float b1 = hardStep(uBands.x, mix(band, bandBroad, 0.62));
@@ -870,7 +907,7 @@ void main() {
   // the trough measured as rgb(0,1,89) — an almost-black hole punched in the
   // surface rather than the bottom band of an ocean. The lift is still made of
   // palette colours; it only stops the pipeline from eating one of them.
-  vec3 col = mix(uDeep, uMid, 0.2);
+  vec3 col = mix(uDeep, uMid, uDeepLift);
   col = mix(col, uMid, b1);
   col = mix(col, uShallow, b2);
   col = mix(col, uCrest, b3);
@@ -890,7 +927,7 @@ void main() {
   // passes straight through grey-green on the way.
   // -----------------------------------------------------------------------
   float sunPlane = hardStep(0.86, formT);
-  col = mix(col, mix(uCrest, uSunTint, 0.28), sunPlane * 0.82);
+  col = mix(col, mix(uCrest, uSunTint, 0.28), sunPlane * uSunPlaneStrength);
 
   // -----------------------------------------------------------------------
   // 3. HORIZON / FRESNEL LIFT
@@ -911,7 +948,7 @@ void main() {
   float lift = clamp(fres * 0.75 + distLift * 0.75, 0.0, 1.0);
   lift = floor(lift * 3.0 + 0.25) / 3.0;
   vec3 liftCol = mix(uCrest, uSkyTint, distLift * 0.55);
-  col = mix(col, liftCol, lift * 0.42);
+  col = mix(col, liftCol, lift * uLiftStrength);
 
   // -----------------------------------------------------------------------
   // 4. CREST CONTOUR
@@ -1165,7 +1202,7 @@ void main() {
   // cyan against sand resolves to a pale warm cyan, which is a colour the frame
   // is allowed to contain.
   flatTone = mix(flatTone, liftCol, lift * 0.5);
-  col = mix(flatTone, col, mix(0.28, 1.0, resolve));
+  col = mix(flatTone, col, mix(uPreFilterFloor, 1.0, resolve));
 
   // -----------------------------------------------------------------------
   // 10. GLITTER

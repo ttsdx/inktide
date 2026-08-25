@@ -165,7 +165,16 @@ export class Engine {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
 
-    this.renderer.setPixelRatio(1); // we size the canvas ourselves
+    // The canvas backing store must be at DEVICE resolution, not CSS
+    // resolution. An earlier build pinned the renderer's pixel ratio to 1 and
+    // sized the canvas in CSS pixels, on the reasoning that the pipeline sizes
+    // its own internal targets. It does — but the final composite pass renders
+    // to the canvas, so on a 2x display the game was supersampling internally
+    // and then resolving into a half-resolution surface that the browser
+    // upscaled. Every edge in the game was soft on retina, and the screenshot
+    // harness silently captured half-resolution frames while its report claimed
+    // otherwise, which invalidated a lot of outline and foam judgement.
+    this.renderer.setPixelRatio(pr);
     this.renderer.setSize(w, h, true);
     this.pipeline.setSize(w, h, pr);
     this.lastPixelRatio = pr;

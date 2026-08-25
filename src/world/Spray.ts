@@ -440,7 +440,12 @@ void main() {
   // what the first version drew — a droplet is more outline than droplet, and
   // the capture came back as a scatter of dark grey pebbles instead of white
   // water. Ink is the last 10%, and everything inside it is foam.
-  float rimRaw = 1.0 - smoothstep(edge * 0.90 - aa, edge * 0.90 + aa, r);
+  // 4% of the radius, not 10%. Particles sit at the BOTTOM of the ink
+  // hierarchy: a frame audit found forty spray droplets each carrying a
+  // heavier contour than the hero boat, which inverts the reading order and
+  // sends the eye to the popcorn. The droplets keep a contour so they still
+  // read as drawn rather than as bloom, but it must never out-weigh the hull.
+  float rimRaw = 1.0 - smoothstep(edge * 0.96 - aa, edge * 0.96 + aa, r);
 
   // Band-limit the ink, and do it explicitly rather than trusting the hard
   // step to degrade gracefully — it does not.
