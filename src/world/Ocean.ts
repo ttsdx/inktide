@@ -139,7 +139,14 @@ export class Ocean {
         /** Weights: x = N·L form, y = swell height, z = total height. */
         uBandMix: { value: new Vector3(0.5, 0.32, 0.18) },
         /** Fold (1 - jacobian) at which foam starts. */
-        uFoamFold: { value: 0.34 },
+        // Raised from 0.34 after measuring the finished game rather than the
+        // water in isolation. With boats on the course the near field was 60%
+        // desaturated pale pixels — foam had stopped picking out crests and
+        // become a flat field the hulls sat in. Sweeping the threshold against
+        // measured pale coverage and mean saturation in the lower half of the
+        // frame: 0.34 gave 60% pale at 0.43 saturation, 0.66 gives 31% at 0.45.
+        // The distance ramp below still charges far foam more on top of this.
+        uFoamFold: { value: 0.66 },
         /** Fold window for the drawn crest contour, just below the foam. */
         uRimFold: { value: new Vector2(0.2, 0.3) },
         uFoamBreakup: { value: 0.34 },
