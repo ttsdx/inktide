@@ -722,8 +722,12 @@ export class Hud {
     // the centreline runs through the ticks, which is what the numerals were
     // doing: the red arc passed straight across the digits and neither could
     // be read against the other.
+    // A dash on the grid rather than a number. Before the start the reading is
+    // a 1 that never changes, which invites the player to look at it and then
+    // tells them nothing; a dash says the instrument is live and waiting.
     const kph = Math.max(0, Math.round(shown * 3.6));
-    drawText(c, `${kph}`, cx, cy - 92 * u, {
+    const reading = data.phase === 'countdown' ? '-' : `${kph}`;
+    drawText(c, reading, cx, cy - 92 * u, {
       size: 52 * u,
       fill: boosting ? CSS.amber : CSS.foam,
       align: 'center',
@@ -885,8 +889,16 @@ export class Hud {
       : 1 - clamp01(this.goTimer / GO_HOLD);
     const punch = 1 + this.countPunch.value * 0.3;
     const cx = this.w * 0.5;
-    const cy = this.h * 0.4;
-    const size = (counting ? 220 : 170) * u;
+    // Sits in the upper third, not the middle.
+    //
+    // At 0.4 of the height and 220 units it covered the player's own boat and
+    // both rivals for the whole countdown — the one moment the grid is worth
+    // looking at, and the first thing anyone sees of the game. It is still by
+    // far the largest thing on screen at 150; a start countdown does not have
+    // to fill the frame to be read, it has to be unmissable, and being alone in
+    // the upper third does that without hiding the race.
+    const cy = this.h * 0.3;
+    const size = (counting ? 150 : 120) * u;
 
     // Two stacked slabs: a wide dark one for contrast under the glyph, and a
     // thin accent one that wipes outwards faster. The pair gives the beat a
@@ -928,6 +940,9 @@ export class Hud {
       outline: 0.075,
       shadow: 9 * u,
       slant: 0.3,
+      // The one place in the HUD that genuinely needs it: at display size the
+      // glyphs' ten-unit grid shows as a staircase down every curve.
+      round: 1.7,
     });
     c.restore();
   }

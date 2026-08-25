@@ -254,6 +254,16 @@ export interface TextStyle {
   /** Hard offset ink shadow distance in pixels. 0 disables. */
   shadow?: number;
   alpha?: number;
+  /**
+   * Corner radius in GRID units, for display sizes.
+   *
+   * The glyphs are polylines on a ten-unit grid, which is plenty for a label
+   * and visibly not enough for something 400 px tall — every curve becomes a
+   * staircase. Rounding the corners turns the same points into a real curve.
+   * Left at zero for body text, where the exact polyline is wanted and the
+   * facets are sub-pixel anyway.
+   */
+  round?: number;
 }
 
 const DEFAULT_SLANT = 0.2;
@@ -303,20 +313,52 @@ export function textPath(text: string, x: number, y: number, st: TextStyle): Pat
   if (st.baseline === 'middle') oy = y - size / 2;
   else if (st.baseline === 'baseline') oy = y - size;
 
+  // Corner radius in path units. Zero keeps the exact polyline.
+  //
+  // The glyphs are polylines on a ten-unit grid, which is the right amount of
+  // data for a label and visibly not enough for a display numeral: the bowl of
+  // a 3 is seven points, so at 600 px it is a heptagon and every curve in it
+  // is a staircase. The countdown is the first thing the player ever sees and
+  // it was measured with 20 px steps down both curves.
+  //
+  // Rounding the corners with arcs turns the same seven points into a genuine
+  // curve. It costs one arcTo per vertex and needs no second glyph set, which
+  // matters in a project that generates every mark it draws.
+  const round = (st.round ?? 0) * u;
+
   const path = new Path2D();
   const s = text.toUpperCase();
   let adv = 0;
   for (let i = 0; i < s.length; i++) {
     const glyph = GLYPHS[s[i]] ?? GLYPHS[' '];
     for (const stroke of glyph.strokes) {
+      const pts: Array<[number, number]> = [];
       for (let k = 0; k < stroke.length; k += 2) {
         const gx = stroke[k];
         const gy = stroke[k + 1];
-        const px = ox + (adv + gx + slant * (GLYPH_CAP * 0.5 - gy)) * u;
-        const py = oy + gy * u;
-        if (k === 0) path.moveTo(px, py);
-        else path.lineTo(px, py);
+        pts.push([
+          ox + (adv + gx + slant * (GLYPH_CAP * 0.5 - gy)) * u,
+          oy + stroke[k + 1] * u,
+        ]);
+        void gy;
       }
+      if (pts.length === 0) continue;
+      path.moveTo(pts[0][0], pts[0][1]);
+      for (let p = 1; p < pts.length - 1; p++) {
+        if (round <= 0) {
+          path.lineTo(pts[p][0], pts[p][1]);
+          continue;
+        }
+        // Bound the radius by half of each adjacent segment so a corner between
+        // two short strokes cannot swallow them and collapse the letterform.
+        const d0 = Math.hypot(pts[p][0] - pts[p - 1][0], pts[p][1] - pts[p - 1][1]);
+        const d1 = Math.hypot(pts[p + 1][0] - pts[p][0], pts[p + 1][1] - pts[p][1]);
+        const r = Math.min(round, d0 * 0.5, d1 * 0.5);
+        if (r <= 0.01) path.lineTo(pts[p][0], pts[p][1]);
+        else path.arcTo(pts[p][0], pts[p][1], pts[p + 1][0], pts[p + 1][1], r);
+      }
+      const last = pts[pts.length - 1];
+      if (pts.length > 1) path.lineTo(last[0], last[1]);
     }
     adv += glyph.w + tracking;
   }
