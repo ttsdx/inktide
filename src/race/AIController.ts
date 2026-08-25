@@ -153,7 +153,29 @@ export interface AIPersonality {
   minCornerFraction: number;
 
   // --- drift and boost ---
-  /** Curvature above which it holds the drift button, 1/m. */
+  /**
+   * Curvature above which it holds the drift button, 1/m.
+   *
+   * WHERE EACH PERSONALITY SHOULD COMMIT TO A SLIDE
+   *
+   * Drifting used to be a compromise. It is not any more: slip angle is 13
+   * degrees rather than 41, the hull barely scrubs speed, a drifted 180 is 1.6 s
+   * quicker than a flat one, and holding the button is how boost charge is
+   * earned in the first place. What it still costs is lateral grip — the physics
+   * fades it towards 4.3 as the slide builds, about a fifth — so a slide is a
+   * win wherever rotating the hull is the binding constraint and a loss wherever
+   * holding a radius is.
+   *
+   * The circuit sorts into three bands, and these thresholds are chosen to sit
+   * in the gaps between them rather than at round numbers:
+   *
+   *   The Pin           r 56 m   k 0.0179   rotation-limited, always worth it
+   *   chicane, x3       r 60 m   k 0.0167   rotation-limited, three cheap boosts
+   *   Reef, Coral       r 135 m  k 0.0074   marginal: grip matters more here
+   *   Sweeper Out       r 172 m  k 0.0058   held on grip; a slide only costs
+   *   Sweeper In        r 271 m  k 0.0037   flat out
+   *   Salt Kinks        r 260 m  k 0.0039   flat out
+   */
   driftCurvature: number;
   /** Extra steering it dials in while drifting, to hold the slide. */
   driftSteerGain: number;
@@ -202,7 +224,8 @@ const BASE: AIPersonality = {
   lateralJerkBudget: 12,
   brakePointScale: 1.0,
   minCornerFraction: 0.42,
-  driftCurvature: 0.0085,
+  // Both rotation-limited bands, nothing above r = 135 m. The balanced default.
+  driftCurvature: 0.0122,
   driftSteerGain: 0.3,
   boostCurvature: 0.003,
   boostChargeThreshold: 0.55,
@@ -236,7 +259,10 @@ export const AI_AGGRESSIVE: AIPersonality = {
   lateralJerkBudget: 15,
   brakePointScale: 0.86,
   minCornerFraction: 0.46,
-  driftCurvature: 0.0055,
+  // Everything with a radius under about 190 m, which is every corner on the
+  // lap bar the two Sweeper halves and the Salt Kinks. It slides for the boost
+  // and pays for it in grip at Reef Bend and Coral Turn.
+  driftCurvature: 0.0054,
   driftSteerGain: 0.42,
   // Fires it early and into a bend it has not finished yet, on a small charge.
   // Frequently the fastest way through the Leeward Drag and occasionally the
@@ -284,16 +310,19 @@ export const AI_CLEAN: AIPersonality = {
   lateralJerkBudget: 14,
   brakePointScale: 0.97,
   minCornerFraction: 0.46,
-  // Slides The Pin and the Kickback on purpose — charge only accrues while
-  // sideways, so a driver who never slides forfeits a boost every lap.
+  // Deliberate rather than incidental: the hairpin and all three chicane
+  // elements, and nothing else. Charge only accrues while sideways, so a driver
+  // who never slides forfeits a boost every lap, and "clean" must not mean
+  // "timid" — it means picking the two places on the lap where a slide is
+  // unambiguously right and committing to both. Measured by section, this
+  // preset now slides 63-75% of The Pin and 39-67% of each chicane element, and
+  // essentially none of the Sweeper, the Salt Kinks or the straights.
   //
-  // Deliberately NOT low enough to catch the chicane, despite the chicane being
-  // tight enough to look like a drift. Measured: a drift held into a direction
-  // reversal costs about a fifth of the hull's lateral grip at exactly the
-  // moment it has to swap lock, and the clean preset slid 27 m wide there and
-  // missed the gate. The `reversalWithin` gate blocks it anyway; this keeps the
-  // preset's intent honest rather than relying on that backstop.
-  driftCurvature: 0.0105,
+  // It used to sit at 0.0105, which reads as the same choice and was not: the
+  // controller refused to slide anywhere near a curvature reversal, so the
+  // chicane was excluded whatever the threshold said, and the preset earned 14
+  // boosts a race against the aggressive one's 28.
+  driftCurvature: 0.0131,
   driftSteerGain: 0.24,
   // Banks a near-full charge and spends it only on a genuine straight, so it
   // gets the whole boost duration at full throttle instead of half of it into a
@@ -331,7 +360,8 @@ export const AI_ERRATIC: AIPersonality = {
   lateralJerkBudget: 13.5,
   brakePointScale: 0.95,
   minCornerFraction: 0.4,
-  driftCurvature: 0.007,
+  // Down into the marginal band, where a slide is not clearly right. Fitting.
+  driftCurvature: 0.0069,
   driftSteerGain: 0.36,
   // The loosest definition of "straight" of the three, which is most of why it
   // sometimes arrives at the chicane far too fast.
@@ -345,8 +375,14 @@ export const AI_ERRATIC: AIPersonality = {
 };
 
 /**
- * Grid order for the three opponents. Index 0 is unused (the player), so
- * `AI_PRESETS[boatId]` reads naturally at the call site.
+ * Personality per boat, indexed by boat id so `AI_PRESETS[boatId]` reads
+ * naturally at the call site.
+ *
+ * The player's boat is included rather than left as a hole: the headless race
+ * probe drives all four from this table so the race is a fair four-way
+ * comparison, and a game that hands the player's hull to a demo mode or an
+ * attract loop wants a personality for it too. `Vermillion` is the balanced
+ * hull, so it gets the balanced driver.
  */
 export const AI_PRESETS: readonly AIPersonality[] = [
   AI_CLEAN,
@@ -373,8 +409,25 @@ const HORIZON_SAMPLES = 14;
  * enough that the direction change is happening now.
  */
 const JERK_CEILING_DISTANCE = 34;
-/** How far ahead an opposite-handed corner blocks committing to a slide. */
+/** How far ahead the controller looks for an opposite-handed corner. */
 const DRIFT_REVERSAL_DISTANCE = 46;
+/**
+ * Seconds it takes to unwind a slide and pick it up the other way.
+ *
+ * The physics decays `driftAmount` towards zero with a rate constant of 3.0,
+ * i.e. a 0.33 s time constant, and the hull's lateral velocity has to be
+ * reversed on top of that. 0.45 s is measured from the trace: a little over one
+ * time constant plus the yaw reversal.
+ *
+ * This replaced a blanket refusal to drift anywhere near a curvature reversal.
+ * The refusal was right about the mechanism and wrong about the conclusion: it
+ * suppressed sliding through the entire chicane, which is three of the seven
+ * real corners on the lap and the place the boost charge is cheapest to earn.
+ * What matters is not whether a reversal is coming but whether there is room to
+ * be straight again before it arrives — which is a question about speed, and at
+ * the 22-25 m/s the chicane is now taken at, the 22 m links are enough.
+ */
+const DRIFT_UNWIND_SECONDS = 0.45;
 /**
  * Share of its gripped cornering budget the AI expects to keep while sliding.
  *
@@ -630,6 +683,38 @@ const BOOST_SATURATED = 0.97;
  */
 const OFFLINE_SPEED_LOSS = 0.42;
 
+/**
+ * STEERING SATURATION AS A FEEDBACK MEASURE OF BEING AT THE LIMIT
+ *
+ * Everything above this is feedforward: the controller predicts what the corner
+ * will take and asks for that speed. Prediction is the right primary strategy
+ * and it is also structurally blind to transients, because it models a hull in
+ * steady state on flat water. The failure it cannot see was measured on the
+ * Sweeper: a boat lands after a full second in the air with its heading a
+ * hundred degrees off the aim point, finds full lock is not enough at 33 m/s,
+ * and is 43 m off line four seconds later — while the corner-speed model, which
+ * is correct about the corner, reports no reason to slow down at all.
+ *
+ * The observable common to every one of those cases is that the boat is holding
+ * a great deal of lock and it is not working. That is measurable without a model
+ * of why, so the controller watches its own steering demand and gives up speed
+ * when it saturates. It is also the most honest possible definition of "at the
+ * limit", which is why the mistake roll reads it too.
+ *
+ * Comfort threshold, above which sustained lock counts as running out of grip.
+ */
+const LOCK_COMFORT = 0.62;
+/** Time constant, seconds, of the lock-demand estimate. */
+const LOCK_TAU = 0.7;
+/** Top-speed fraction surrendered at full sustained lock. */
+const LOCK_SPEED_LOSS = 0.34;
+/**
+ * Fraction of top speed below which steering demand carries no information. The
+ * physics ramps rudder authority in over the first 9 m/s and the AI legitimately
+ * uses most of the lock available through the slowest part of The Pin.
+ */
+const LOCK_MIN_SPEED = 0.62;
+
 function hullCorneringFactor(spec: BoatState['spec']): number {
   const grip = 9.5 + (3.2 - 9.5) * clamp(spec.slidiness, 0, 1);
   const gripFactor = grip / 6.35;
@@ -706,6 +791,9 @@ export class AIController {
   /** Counts down while the drift button is deliberately released to fire a boost. */
   private releaseTimer = 0;
 
+  /** Low-passed magnitude of the steering command. See LOCK_COMFORT. */
+  private lockDemand = 0;
+
   /**
    * Grip/yaw scale for the hull this controller is driving. Latched on the first
    * update rather than in the constructor, because the controller is handed a
@@ -754,6 +842,7 @@ export class AIController {
     this.bandFiltered = 0;
     this.airFraction = 0;
     this.releaseTimer = 0;
+    this.lockDemand = 0;
   }
 
   update(
@@ -864,16 +953,17 @@ export class AIController {
     // Drift intent, settled early because whether the hull will be stuck or
     // sliding changes how fast every corner in the horizon can be taken.
     //
-    // A drift commits the hull to sliding one way. Into an S-bend that is
-    // exactly wrong: the slide has to be unwound before the second element can
-    // be turned into, and at chicane speeds there is not enough road to do it.
+    // A drift commits the hull to sliding one way, and going into an S-bend that
+    // has to be undone before the second element can be turned into. Whether
+    // that is a problem is a question of room: see DRIFT_UNWIND_SECONDS.
     //
     // Note this tests for an imminent *reversal*, not for a high rate of change
     // of curvature. Every corner entry has a high rate of change — that is what
     // an entry is — so gating on the rate suppressed the drift everywhere,
     // including at the hairpin where it is most wanted, and cost the field its
     // boost charge along with it.
-    const reversalAhead = this.reversalWithin(t, DRIFT_REVERSAL_DISTANCE);
+    const reversalIn = this.reversalDistance(t, DRIFT_REVERSAL_DISTANCE);
+    const reversalAhead = reversalIn < speed * DRIFT_UNWIND_SECONDS;
     // Trailing racers slide on shallower corners to farm charge; leaders raise
     // the bar and coast. See `chase`.
     const driftK = P.driftCurvature * (1 - chase * DRIFT_CHASE_RANGE);
@@ -946,6 +1036,9 @@ export class AIController {
       // and across the course, and two of them in quick succession with opposite
       // signs swept the hull 24 m sideways in two seconds.
       cornerSign: -Math.sign(kEntry || kAhead) || 1,
+      // Last frame's value: steering is decided below this point. One frame of
+      // staleness against a 0.7 s time constant is not worth restructuring for.
+      lockDemand: this.lockDemand,
     });
 
     let offsetFraction = P.lineOffset;
@@ -1058,6 +1151,15 @@ export class AIController {
 
     let steer = p * headingError + d * this.filteredErrorRate;
 
+    // Lock the *line* is asking for, before the drift compensation and the
+    // side-by-side courtesy get their hands on it. Both of those move the
+    // command for reasons that say nothing about grip — holding a slide takes
+    // lock by design, and yielding to a neighbour removes it — so measuring the
+    // emitted command instead made the saturation signal mean four things at
+    // once and it spiralled: the boat slowed, still needed lock, slowed further,
+    // and crawled a 275 s lap. See LOCK_COMFORT.
+    const lineLock = Math.abs(clamp(steer, -1, 1));
+
     // While drifting, the hull is pointing further into the corner than it is
     // travelling, so the aim-point error under-reports how much lock is needed
     // to hold the slide. Add a term proportional to the slip being carried.
@@ -1111,6 +1213,21 @@ export class AIController {
     // Final smoothing so the steering trace looks like a hand on a stick.
     const steerLag = Math.min(1, 26 * dt);
     this.steerSmoothed += (steer - this.steerSmoothed) * steerLag;
+
+    // How much lock this is taking, averaged over about a corner entry. See
+    // LOCK_COMFORT. Not counted while airborne, where a steering command is not
+    // evidence of anything because the hull has no authority to spend, nor below
+    // LOCK_MIN_SPEED, where the physics ramps rudder authority in from zero and
+    // needing a lot of lock is simply what going slowly is like.
+    if (!state.airborne && speed > topSpeed * LOCK_MIN_SPEED) {
+      this.lockDemand += (lineLock - this.lockDemand) * (1 - Math.exp(-dt / LOCK_TAU));
+    } else {
+      this.lockDemand -= this.lockDemand * (1 - Math.exp(-dt / LOCK_TAU));
+    }
+    // Suppressed while off the course: out there a lot of lock is the recovery
+    // working as designed, and OFFLINE_SPEED_LOSS is already handling the speed.
+    const lockOver =
+      excess > 0 ? 0 : clamp((this.lockDemand - LOCK_COMFORT) / (1 - LOCK_COMFORT), 0, 1);
 
     // -----------------------------------------------------------------------
     // 6. SPEED
@@ -1193,6 +1310,12 @@ export class AIController {
     if (this.mistake === 'bogged') targetSpeed = Math.min(targetSpeed, topSpeed * 0.45);
     if (recovering) targetSpeed = Math.min(targetSpeed, topSpeed * 0.82);
 
+    // Out of steering, therefore out of grip. See LOCK_COMFORT.
+    if (lockOver > 0) {
+      targetSpeed = Math.min(targetSpeed, topSpeed * (1 - lockOver * LOCK_SPEED_LOSS));
+      brake = Math.max(brake, lockOver * 0.5);
+    }
+
     // Off the course: getting back matters more than the lap time, and the
     // curvature scan is unreliable out here anyway because it is reading the
     // spline under a boat that is not on it. See OFFLINE_SPEED_LOSS.
@@ -1206,7 +1329,12 @@ export class AIController {
     // Pointing the wrong way: get the nose round before worrying about pace.
     if (spun) {
       targetSpeed = Math.min(targetSpeed, topSpeed * RECOVER_SPEED_FRACTION);
-      brake = Math.max(brake, 0.35);
+      // Only if genuinely carrying too much speed. The physics ramps rudder
+      // authority in over the first 9 m/s, so a boat that has been shunted round
+      // and is limping backwards at 7 m/s needs the flow it has, not less of it;
+      // braking there was making the recovery arc longer, which is the opposite
+      // of what this rule is for.
+      if (speed > topSpeed * RECOVER_SPEED_FRACTION) brake = Math.max(brake, 0.35);
     }
 
     // Throttle: open unless we are above the target. Braking and throttle are
@@ -1295,44 +1423,6 @@ export class AIController {
     c.steer = clamp(this.steerSmoothed, -1, 1);
     c.drift = drift;
 
-    // TEMP-DEBUG
-    const dbg = (globalThis as Record<string, unknown>).__AI_DEBUG as
-      | ((s: Record<string, number | string | boolean>) => void)
-      | undefined;
-    if (dbg) {
-      dbg({
-        id: this.boatId,
-        t,
-        lat: lateralNow,
-        excess,
-        spun,
-        recovering: this.recovering,
-        lookahead,
-        offsetFraction,
-        wantOffset,
-        lateralTarget: this.lateralTarget,
-        headingError,
-        steer: c.steer,
-        rawSteer: steer,
-        throttle: c.throttle,
-        brake: c.brake,
-        drift: c.drift,
-        air: state.airborne,
-        speed,
-        mistake: this.mistake,
-        lift: avoid.lift,
-        pace,
-        band,
-        bandInput,
-        chase,
-        position: progress.position,
-        latBudget,
-        targetSpeed,
-        blockSide: avoid.blockSide,
-        avoidOffset: avoid.offsetFraction,
-        width: this.aheadPoint.width,
-      });
-    }
     return c;
   }
 
@@ -1382,6 +1472,7 @@ export class AIController {
       drifting: boolean;
       offLine: number;
       cornerSign: number;
+      lockDemand: number;
     },
   ): void {
     const P = this.personality;
@@ -1414,7 +1505,11 @@ export class AIController {
       0,
       1,
     );
-    const pressure = clamp(overLimit + ctx.offLine * 0.5, 0, 1);
+    // And having run out of steering is the same statement arrived at from
+    // measurement rather than prediction, so it counts for as much. See
+    // LOCK_COMFORT.
+    const outOfLock = clamp((ctx.lockDemand - LOCK_COMFORT) / (1 - LOCK_COMFORT), 0, 1);
+    const pressure = clamp(Math.max(overLimit, outOfLock) + ctx.offLine * 0.5, 0, 1);
 
     // A baseline keeps some unpredictability on a perfectly judged lap; the rest
     // is earned by pushing. `mistakeRate` is the rate at full pressure.
@@ -1441,20 +1536,23 @@ export class AIController {
   }
 
   /**
-   * True if the course changes hand within `distance` metres — the signed
-   * curvature flips sign with real magnitude on both sides. Four samples is
-   * plenty: the shortest element on the circuit is the 22 m chicane link, and
-   * the curvature table is already smoothed over roughly a hull length.
+   * Metres to the point within `distance` where the course changes hand — the
+   * signed curvature flips sign with real magnitude on both sides — or
+   * `Infinity` if it does not. Six samples is plenty: the shortest element on
+   * the circuit is the 22 m chicane link, and the curvature table is already
+   * smoothed over roughly a hull length.
    */
-  private reversalWithin(t: number, distance: number): boolean {
+  private reversalDistance(t: number, distance: number): number {
+    const steps = 6;
     let reference = 0;
-    for (let i = 0; i <= 4; i++) {
-      const k = this.course.signedCurvatureAt(this.course.advance(t, (distance * i) / 4));
+    for (let i = 0; i <= steps; i++) {
+      const at = (distance * i) / steps;
+      const k = this.course.signedCurvatureAt(this.course.advance(t, at));
       if (Math.abs(k) < REVERSAL_K) continue;
       if (reference === 0) reference = Math.sign(k);
-      else if (Math.sign(k) !== reference) return true;
+      else if (Math.sign(k) !== reference) return at;
     }
-    return false;
+    return Infinity;
   }
 
   // -------------------------------------------------------------------------

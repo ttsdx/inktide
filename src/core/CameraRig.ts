@@ -69,15 +69,30 @@ export interface CameraTuning {
   lookOmega: number;
 }
 
+/**
+ * Chase tuning.
+ *
+ * `posOmega` is the number that matters and it is not a free choice: a
+ * critically-damped spring tracking a target moving at v settles with a steady
+ * lag of v/omega. At 34 m/s and omega 6.2 that is 5.5 m of permanent lag on top
+ * of the nominal distance, and measurement showed it drifting out past 25 m as
+ * the boat kept accelerating — far enough that the boat became a speck. At 9.5
+ * the lag is 3.6 m, which still reads as weight without losing the subject.
+ *
+ * `fovSpeedGain` was similarly overdrawn: 15 degrees on top of 57 put the
+ * camera at 72 degrees flat out, which is a fisheye. It shrinks everything in
+ * frame at exactly the moment the player most needs to read the boat's
+ * attitude. 9 degrees still gives the speed rush.
+ */
 export const DEFAULT_TUNING: CameraTuning = {
-  distance: 11.4,
-  distanceSpeedGain: 3.6,
-  height: 4.35,
-  lookAhead: 9.5,
-  fovBase: 57,
-  fovSpeedGain: 15,
-  posOmega: 6.2,
-  lookOmega: 8.4,
+  distance: 10.2,
+  distanceSpeedGain: 2.4,
+  height: 3.9,
+  lookAhead: 8.0,
+  fovBase: 56,
+  fovSpeedGain: 9,
+  posOmega: 9.5,
+  lookOmega: 11.0,
 };
 
 export class CameraRig {

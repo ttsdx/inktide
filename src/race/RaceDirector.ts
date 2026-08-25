@@ -49,6 +49,32 @@ const WRONG_WAY_OFF = 0.85;
 const WRONG_WAY_SPEED = -1.5;
 /** Below this ground speed the test is meaningless, so it is suspended. */
 const WRONG_WAY_MIN_SPEED = 3.0;
+/**
+ * Ground speed a racer that is still *facing* the right way has to be making in
+ * reverse before it counts as going the wrong way, m/s.
+ *
+ * BEING SHUNTED IS NOT GOING THE WRONG WAY
+ *
+ * Every wrong-way event left in a sixteen-race sample was the same thing, and it
+ * was not what this detector is for: two boats collide, both are knocked to
+ * walking pace and pushed backwards at six or seven metres a second, and the
+ * banner fires on a racer that is sitting on the racing line pointing correctly
+ * down the course. Measured across those races the reverse speeds ran from 3.5
+ * to 9.2 m/s and the lateral offsets from -8.7 to +6.7 m — dead centre.
+ *
+ * A racer that has genuinely turned round is facing backwards, so the hull's
+ * heading is what separates the two cases, and the speed floor only needs to be
+ * raised for the one where it is not. A boat facing the right way has to be
+ * carrying real reverse speed to earn the banner; a boat facing backwards earns
+ * it at any speed at all, which is the case the detector actually exists for.
+ */
+const WRONG_WAY_SHUNT_SPEED = 12.0;
+/**
+ * Alignment of the hull with the course below which it counts as facing
+ * backwards. -0.35 is about 110 degrees, comfortably past anything a drift or a
+ * bad landing produces.
+ */
+const WRONG_WAY_FACING = -0.35;
 
 /**
  * How far past a pending gate a racer can get before we tell them they missed
@@ -142,8 +168,8 @@ interface RacerInternal {
    * banked a gate. See the anti-cut note in `checkCheckpoint`.
    */
   cutSinceGate: boolean;
-  /** Seconds of sustained gross departure accumulated so far. See CUT_SECONDS. */
-  cutTimer: number;
+  /** Metres of circuit swept while grossly off line. See CUT_DISTANCE. */
+  cutDistance: number;
   wrongWayTimer: number;
   rightWayTimer: number;
   lapStartTime: number;
@@ -191,9 +217,13 @@ const LEFT_COURSE_MULTIPLE = 5.5;
  * it comfortably and a straight does not.
  */
 const CUT_MIN_CURVATURE = 0.002;
-/** Seconds of sustained departure before it counts as a cut. */
-const CUT_SECONDS = 1.5;
-/** How fast the cut timer unwinds once the racer is back where it belongs. */
+/**
+ * Metres of circuit that may go past while a racer is grossly off line on the
+ * inside before it counts as a cut. Between the 64 m of the worst honest
+ * excursion and the 174 m of cutting The Pin.
+ */
+const CUT_DISTANCE = 105;
+/** How fast the tally unwinds once the racer is back where it belongs. */
 const CUT_DECAY = 0.5;
 
 export class RaceDirector {
@@ -299,7 +329,7 @@ export class RaceDirector {
       s.gatePrimed = false;
       s.missedReported = false;
       s.cutSinceGate = false;
-      s.cutTimer = 0;
+      s.cutDistance = 0;
       s.wrongWayTimer = 0;
       s.rightWayTimer = 0;
       s.lapStartTime = 0;
@@ -419,16 +449,23 @@ export class RaceDirector {
       // LEFT_COURSE_MULTIPLE the boat is so far out that it is not racing the
       // circuit at all and the side stops mattering.
       //
-      // AND SO DOES DURATION
+      // AND SO DOES HOW MUCH COURSE GOES BY
       //
       // Sidedness alone still misreads the chicane, because in an S-bend the
       // outside of one element is the inside of the next: a racer that ran wide
-      // at Chicane In was, one spline sample later, "inside" Chicane Flick and
-      // lost the lap for it. Cutting is a sustained act — the chord of The Pin
-      // is 112 m and takes nearly four seconds — while the S-bend artefact lasts
-      // a fraction of one. Requiring the departure to persist separates them
-      // with room to spare, and the timer decays rather than resetting so a
-      // racer cannot chop a cut into legal-length pieces.
+      // at Chicane In was, one spline sample later, "inside" Chicane Flick, and
+      // lost the lap for it.
+      //
+      // What separates the two cleanly is not how long the racer is out there
+      // but how much circuit goes past while it is. Measured: cutting the chord
+      // of The Pin sweeps 174 m of spline, and running 34 m wide of the chicane
+      // — the worst excursion the AI produces — sweeps 64 m. Note that *time*
+      // gets this backwards, at 1.1 s for the cut against 2.5 s for the mistake,
+      // which is exactly right and is the whole point: a cut is fast because it
+      // is a straight line, and running wide is slow because it is a mistake.
+      // Distance skipped is what cutting actually is, so distance is what to
+      // measure. It decays rather than resetting so a cut cannot be chopped into
+      // legal-length pieces.
       const off = Math.abs(_progress.lateralOffset);
       const widths = off / Math.max(this.course.widthAt(t), 1);
       let cutting = widths > LEFT_COURSE_MULTIPLE;
@@ -437,8 +474,9 @@ export class RaceDirector {
         cutting =
           Math.abs(k) > CUT_MIN_CURVATURE && Math.sign(_progress.lateralOffset) === Math.sign(k);
       }
-      s.cutTimer = Math.max(0, s.cutTimer + (cutting ? ctx.dt : -ctx.dt * CUT_DECAY));
-      if (s.cutTimer > CUT_SECONDS) s.cutSinceGate = true;
+      const swept = Math.abs(delta) * this.course.length;
+      s.cutDistance = Math.max(0, s.cutDistance + (cutting ? swept : -swept * CUT_DECAY));
+      if (s.cutDistance > CUT_DISTANCE) s.cutSinceGate = true;
 
       // Clamp to the validated lap count. A boat cannot be reported as more
       // than one lap ahead of the gates it has actually passed, which closes the
@@ -508,7 +546,7 @@ export class RaceDirector {
       // widths out; contact puts it barely two.
       if (s.cutSinceGate) {
         s.cutSinceGate = false;
-        s.cutTimer = 0;
+        s.cutDistance = 0;
         return;
       }
       this.passGate(p, s);
@@ -533,7 +571,7 @@ export class RaceDirector {
     s.gatePrimed = false;
     s.missedReported = false;
     s.cutSinceGate = false;
-    s.cutTimer = 0;
+    s.cutDistance = 0;
 
     // The split is measured from the start of the lap in progress, so it is
     // directly comparable with the same gate on any other lap.
@@ -623,8 +661,12 @@ export class RaceDirector {
     const closing = state.velocity.x * _tangent.x + state.velocity.z * _tangent.z;
 
     // Below walking pace the sign of the closing speed is noise, and a boat
-    // stopped against a buoy is not "going the wrong way".
-    const backwards = state.speed > WRONG_WAY_MIN_SPEED && closing < WRONG_WAY_SPEED;
+    // stopped against a buoy is not "going the wrong way". Above it, how much
+    // reverse speed is needed depends on whether the hull is actually pointing
+    // backwards — see WRONG_WAY_SHUNT_SPEED.
+    const facing = state.forward.x * _tangent.x + state.forward.z * _tangent.z;
+    const floor = facing < WRONG_WAY_FACING ? WRONG_WAY_MIN_SPEED : WRONG_WAY_SHUNT_SPEED;
+    const backwards = state.speed > floor && closing < WRONG_WAY_SPEED;
 
     if (backwards) {
       s.wrongWayTimer += dt;
@@ -798,7 +840,7 @@ function blankInternal(gateCount: number): RacerInternal {
     gatePrimed: false,
     missedReported: false,
     cutSinceGate: false,
-    cutTimer: 0,
+    cutDistance: 0,
     wrongWayTimer: 0,
     rightWayTimer: 0,
     lapStartTime: 0,
