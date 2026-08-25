@@ -1222,8 +1222,30 @@ void main() {
   float foamCore = hardStep(foamFold + 0.19, torn - fn * 0.12);
   float foamHalo = hardStep(foamFold - 0.11, torn);
 
+  // -----------------------------------------------------------------------
+  // FOAM TONE: three flat steps, never a ramp.
+  //
+  // `freshness` is a continuous field — the wake texture's age term is smooth
+  // by construction — so mixing the foam colour by it directly painted the
+  // inside of every foam patch as an airbrushed gradient. Cropped to native
+  // resolution, the wake behind a boat was a single smooth wash running most
+  // of the way across the frame with no step anywhere in it: the one surface
+  // in the game that had abandoned the art direction completely, and the
+  // largest one, because a wake at speed covers more of the screen than the
+  // boat does.
+  //
+  // The edge was never the problem here. Quantising the interior is.
+  //
+  // Three tones rather than two, and the deepest is pulled towards the crest
+  // cyan rather than being another near-white: `foamShade` and `foam` are 0.72
+  // and 0.98 in value, so a two-step foam has almost no internal contrast and
+  // reads as one tone with a slightly dirty edge whatever the threshold does.
+  // -----------------------------------------------------------------------
   float freshness = clamp(max(wakeFresh, crestSignal * 2.0 + depthFoam + contact), 0.0, 1.0);
-  vec3 foamCol = mix(uFoamShade, uFoam, clamp(foamCore * 0.75 + freshness * 0.45, 0.0, 1.0));
+  float foamTone = clamp(foamCore * 0.75 + freshness * 0.45, 0.0, 0.999);
+  float foamStep = floor(foamTone * 3.0);
+  vec3 foamDeep = mix(uCrest, uFoamShade, 0.55);
+  vec3 foamCol = foamStep < 0.5 ? foamDeep : (foamStep < 1.5 ? uFoamShade : uFoam);
 
   col = mix(col, uCrest * 1.15, clamp(foamHalo - foamEdge, 0.0, 1.0) * 0.75);
   col = mix(col, foamCol, foamEdge);
