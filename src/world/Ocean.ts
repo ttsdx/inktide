@@ -152,7 +152,6 @@ export class Ocean {
          * 0.99. Troughs are a minority of the surface, which is why the median
          * barely moves while the low tail opens right up — that is the shape a
          * legible sea should have.
-         */
          *
          * That sweep scored tone alone, and won on it — but the same push that
          * made the deep tone reachable also put the MEDIAN into the deepest
