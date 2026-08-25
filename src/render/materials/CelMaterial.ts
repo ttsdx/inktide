@@ -228,6 +228,7 @@ export class OutlineMaterial extends ShaderMaterial {
         // Lines thin out with distance a little so a far-off pack of boats does
         // not turn into a black smear; 1.0 = perfectly constant screen width.
         uDistanceTaper: { value: 0.62 },
+        uMaxPushWorld: { value: 1e9 },
       },
       vertexShader: OUTLINE_VERT,
       fragmentShader: OUTLINE_FRAG,
@@ -244,6 +245,8 @@ uniform float uWidthPx;
 uniform vec2 uViewport;
 uniform float uViewportHeight;
 uniform float uDistanceTaper;
+/** Hard ceiling on the shell offset in world units. See the note below. */
+uniform float uMaxPushWorld;
 
 out float vViewDepth;
 out vec3 vViewNormal;
@@ -300,7 +303,27 @@ void main() {
   // frame is simply drawn a little heavier, which is the failure mode to prefer.
   float resScale = clamp(uViewportHeight / 1080.0, 0.8, 3.0);
   vec2 ndcPerPixel = 2.0 / uViewport;
-  clip.xy += dir * (uWidthPx * resScale * taper * facing) * ndcPerPixel * clip.w;
+  float wantPx = uWidthPx * resScale * taper;
+
+  // Cap the push against the object's own thinnest dimension.
+  //
+  // An inverted hull assumes the shell can be pushed outward without swallowing
+  // the object. On thin geometry it cannot: a gate's arch is a tube a few
+  // centimetres across, and a 5 px shell around it meets itself in the middle,
+  // so the whole tube renders as a solid black band with the cyan showing only
+  // where the shell happens to miss. Captured frames showed the arch as a heavy
+  // black stroke wider than the thing it was outlining, while the boats beside
+  // it had no visible line at all.
+  //
+  // Converting the requested pixel width into world units at this depth lets it
+  // be clamped to a third of the object's smallest extent, so a line can never
+  // out-weigh its own subject. Thick objects are unaffected.
+  float projScaleY = max(projectionMatrix[1][1], 1e-4);
+  float unitsPerPixel = (2.0 * depth) / (projScaleY * max(uViewport.y, 1.0));
+  float maxPx = uMaxPushWorld / max(unitsPerPixel, 1e-6);
+  float pixels = min(wantPx, maxPx) * facing;
+
+  clip.xy += dir * pixels * ndcPerPixel * clip.w;
 
   gl_Position = clip;
 }

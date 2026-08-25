@@ -152,7 +152,7 @@ export class Game {
     // of the lower half of the frame from the chase camera — a navigation aid
     // reading as a green carpet laid over the water rather than a marker on it.
     this.racingLine = new RacingLine(this.course, { halfWidth: 1.05 });
-    this.racingLine.glowMaterial.uniforms.uWidthScale.value = 1.9;
+    this.racingLine.glowMaterial.uniforms.uWidthScale.value = 1.5;
     this.racingLine.mesh.traverse((o) => o.layers.set(LAYER_OVERLAY));
     this.raceRoot.add(this.racingLine.mesh);
 

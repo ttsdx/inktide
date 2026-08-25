@@ -524,8 +524,17 @@ void main() {
   // Alpha: the body is mostly solid so the colours read true against blue
   // water; the interior between chevrons stays translucent so the water bands
   // still show through and the line does not become a painted-on decal.
-  float alpha = 0.30 + 0.52 * chevron + 0.40 * rail;
-  alpha = min(alpha, 0.94) * margin;
+  // Alpha, rebalanced after a frame audit measured the ribbon at up to 11.5%
+  // of frame area in the most saturated colour in the game — brighter and
+  // higher-contrast than the player's own boat, which put a navigation aid at
+  // the top of the frame's reading order.
+  //
+  // The structure is what should carry the line: the chevrons and the two
+  // rails. The body between them only has to be present enough to connect
+  // them, so it drops from 0.30 to 0.11 and the cap comes down from 0.94.
+  // Same hue, same brief ("a glowing green racing line"), a third of the ink.
+  float alpha = 0.11 + 0.46 * chevron + 0.38 * rail;
+  alpha = min(alpha, 0.66) * margin;
 
   // Fade out at extreme range instead of turning the far side of the circuit
   // into a hard green wire across the horizon.

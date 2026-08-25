@@ -27,6 +27,7 @@ const _c = new Vector3();
 const _ab = new Vector3();
 const _ac = new Vector3();
 const _n = new Vector3();
+const _scale = new Vector3();
 
 /**
  * Compute area-weighted normals averaged over every vertex that shares a world
@@ -201,6 +202,25 @@ export function attachOutline(mesh: Mesh, opts: OutlineOptions = {}): Mesh {
   // rather than the same object at different distances. 0.9 keeps a token
   // recession at the horizon and is otherwise constant.
   mat.uniforms.uDistanceTaper.value = opts.distanceTaper ?? 0.9;
+
+  // An ink line may never be more than a third of its own subject's thinnest
+  // dimension. Measured on the geometry's bounding box rather than its
+  // bounding sphere, because the case this exists for — a gate's arch tube — is
+  // long in two axes and thin in the third, so a sphere would report it as a
+  // large object and clamp nothing.
+  geo.computeBoundingBox();
+  const bb = geo.boundingBox;
+  if (bb) {
+    const sx = bb.max.x - bb.min.x;
+    const sy = bb.max.y - bb.min.y;
+    const sz = bb.max.z - bb.min.z;
+    const thinnest = Math.min(sx, sy, sz);
+    // Scale into world units: a mesh may be nested under scaled parents.
+    mesh.updateWorldMatrix(true, false);
+    _scale.setFromMatrixScale(mesh.matrixWorld);
+    const worldThinnest = thinnest * Math.max(_scale.x, _scale.y, _scale.z);
+    mat.uniforms.uMaxPushWorld.value = Math.max(worldThinnest * 0.34, 1e-4);
+  }
   registry.add(mat);
   applyViewport(mat);
 

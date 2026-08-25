@@ -106,7 +106,7 @@ export class Gate {
     this.group.rotation.y = Math.atan2(this.tangent.x, this.tangent.z);
 
     const hullMat = new CelMaterial({
-      color: PALETTE.foamShade,
+      color: PALETTE.skyHorizon,
       rampTint: PALETTE.foam,
       rimColor: PALETTE.skyHaze,
       rimStrength: 0.7,
@@ -158,9 +158,17 @@ export class Gate {
     // The arch. Built as a chord-sampled tube rather than a TorusGeometry
     // segment so the sag is a controllable catenary-ish curve and the ends land
     // exactly on the pylon tops at any half-width.
+    // Warm, not near-ink.
+    //
+    // The arch was painted `inkSoft`, which made it the heaviest black mass in
+    // any frame containing a gate — heavier than the hero boat's own contour,
+    // so a course marker out-ranked the racer in the reading order. It is also
+    // the only large object in the game that is neither sky nor water, so a
+    // warm tone both fixes the weight problem and turns gates into legible
+    // landmarks against an otherwise entirely blue frame.
     const archMat = new CelMaterial({
-      color: PALETTE.inkSoft,
-      rampTint: PALETTE.skyHaze,
+      color: PALETTE.uiAmber,
+      rampTint: PALETTE.skyHorizon,
       specStrength: 0.5,
       matcapStrength: 0.2,
       name: 'GateArch',
