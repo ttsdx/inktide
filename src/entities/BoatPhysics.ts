@@ -60,9 +60,35 @@ function filteredSurface(world: Vector3, forward: Vector3, time: number): number
   return (centre + ahead + behind) / 3;
 }
 
+/**
+ * Deterministic per-boat noise.
+ *
+ * The physics needs a little randomness — a landing that jolts the hull by
+ * exactly the same amount every time reads as mechanical, and spray that always
+ * leaves the same side of the bow is a pattern the eye finds immediately. But
+ * `Math.random()` makes a race unreproducible, and this project's entire
+ * verification story rests on reproducibility: the screenshot harness claims a
+ * shot at t = 12.0s is the same frame on every run, and the headless probes
+ * claim to be measurements rather than samples. Neither is true if the hull
+ * rolls an unseeded die on every landing.
+ *
+ * mulberry32: small, fast, and good enough for jitter.
+ */
+function makeRng(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 export class BoatPhysics implements BoatState {
   readonly id: number;
   readonly spec: BoatSpec;
+  /** Seeded from the boat id so each hull jitters differently but repeatably. */
+  private readonly rng: () => number;
 
   readonly position = new Vector3();
   readonly forward = new Vector3(0, 0, 1);
@@ -111,6 +137,7 @@ export class BoatPhysics implements BoatState {
 
   constructor(id: number, spec: BoatSpec, startPosition: Vector3, startHeading: number) {
     this.id = id;
+    this.rng = makeRng(0x9e3779b9 ^ (id * 2654435761));
     this.spec = spec;
     this.position.copy(startPosition);
     this.startPosition.copy(startPosition);
@@ -567,7 +594,7 @@ export class BoatPhysics implements BoatState {
     this.velocity.multiplyScalar(1 - penalty * 0.42);
 
     // Drive the hull down into the water so the recovery reads as a real slam.
-    this.pitchRate += (Math.random() - 0.5) * impactSpeed * 0.06;
+    this.pitchRate += (this.rng() - 0.5) * impactSpeed * 0.06;
 
     const strength = MathUtils.clamp(impactSpeed / 12, 0, 1);
     effects?.shake(0.18 + strength * 0.95, 26);
@@ -579,9 +606,9 @@ export class BoatPhysics implements BoatState {
         effects.spray({
           position: _tmp.clone(),
           velocity: new Vector3(
-            this.velocity.x * 0.28 + (Math.random() - 0.5) * 4,
+            this.velocity.x * 0.28 + (this.rng() - 0.5) * 4,
             2.6 + strength * 8.5,
-            this.velocity.z * 0.28 + (Math.random() - 0.5) * 4,
+            this.velocity.z * 0.28 + (this.rng() - 0.5) * 4,
           ),
           count: Math.round(14 + strength * 46),
           spread: 1.1 + strength * 2.4,
@@ -614,7 +641,7 @@ export class BoatPhysics implements BoatState {
 
     // Bow spray goes outboard and up; slide spray comes off the loaded side.
     const side = this.lateralSpeed > 0 ? -1 : 1;
-    const p = slide > 0.35 ? SPRAY_POINTS[side > 0 ? 1 : 0] : SPRAY_POINTS[Math.random() < 0.5 ? 0 : 1];
+    const p = slide > 0.35 ? SPRAY_POINTS[side > 0 ? 1 : 0] : SPRAY_POINTS[this.rng() < 0.5 ? 0 : 1];
     this.localToWorld(p, _tmp);
 
     effects.spray({

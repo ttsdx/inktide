@@ -61,6 +61,9 @@ let maxLateral = [0, 0, 0, 0];
 let t = 0;
 let frame = 0;
 let finishedAt = -1;
+let currentLeader = -1;
+let leadChanges = 0;
+const leadOrder: string[] = [];
 
 while (t < MAX_SECONDS) {
   t += DT;
@@ -88,6 +91,17 @@ while (t < MAX_SECONDS) {
   }
 
   director.update(states, ctx);
+
+  if (launched) {
+    // Sample the leader every tick while the race is live. Anything derived
+    // from the event log after the fact cannot see the order as it was.
+    const lead = director.standings()[0];
+    if (lead && lead.boatId !== currentLeader) {
+      if (currentLeader !== -1) leadChanges++;
+      currentLeader = lead.boatId;
+      leadOrder.push(BOAT_SPECS[currentLeader].name);
+    }
+  }
 
   if (launched) {
     for (let i = 0; i < 4; i++) {
@@ -192,19 +206,13 @@ console.log(`  wrong-way events: ${wrongWay.length}`);
 
 console.log('\nLEAD CHANGES');
 {
-  let leader = -1;
-  let changes = 0;
-  const order: string[] = [];
-  for (const e of events) {
-    if (e.type === 'gate' && e.boatId >= 0) {
-      const lead = director.standings()[0];
-      if (lead && lead.boatId !== leader) {
-        leader = lead.boatId;
-        changes++;
-        order.push(BOAT_SPECS[leader].name);
-      }
-    }
-  }
-  console.log(`  ${changes} recorded (final leader ${BOAT_SPECS[standings[0]?.boatId ?? 0].name})`);
+  // Counted inside the simulation loop, not here. An earlier version walked the
+  // event log calling `director.standings()[0]`, which of course returns the
+  // *final* standings however far back in the log you are, so it reported
+  // exactly one change no matter what happened in the race.
+  console.log(`  ${leadChanges} changes of leader during the race`);
+  console.log(`  order: ${leadOrder.join(' -> ') || '(none)'}`);
+  const positionEvents = events.filter((e) => e.type === 'position').length;
+  console.log(`  ${positionEvents} position changes anywhere in the field`);
 }
 console.log('');
