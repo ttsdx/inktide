@@ -205,7 +205,21 @@ async function main() {
       await page.evaluate(() => window.__INKTIDE__.harness.renderFrames(3));
 
       const file = path.join(args.outDir, `${shot.id}.png`);
-      await page.locator('#scene').screenshot({ path: file, scale: 'device' });
+      if (shot.includeHud) {
+        // Full-page capture so the DOM/canvas HUD overlay is included.
+        await page.screenshot({ path: file, scale: 'device', animations: 'disabled', timeout: 90000 });
+      } else {
+        // Read the WebGL canvas directly. The renderer is created with
+        // preserveDrawingBuffer, so this returns the exact framebuffer at
+        // device resolution — no compositor round-trip, and none of
+        // Playwright's element-stability waiting, which times out on a paused
+        // page under a software rasteriser.
+        const dataUrl = await page.evaluate(() => {
+          const c = document.getElementById('scene');
+          return c.toDataURL('image/png');
+        });
+        await writeFile(file, Buffer.from(dataUrl.split(',')[1], 'base64'));
+      }
 
       const stats = await page.evaluate(() => window.__INKTIDE__.harness.stats());
       results.push({ id: shot.id, group: shot.group, file, stats, ms: Date.now() - started });

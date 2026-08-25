@@ -105,7 +105,9 @@ export class Sky {
         uTime: { value: 0 },
         uNoise: { value: packedNoise() },
         uSunDir: { value: SUN.clone() },
-        uCoverage: { value: 0.52 },
+        // Coverage is deliberately low. A busy sky competes with the water for
+        // attention, and the water is the star.
+        uCoverage: { value: 0.40 },
       },
       vertexShader: DOME_VERT,
       fragmentShader: CLOUD_FRAG,
@@ -188,58 +190,74 @@ const vec3 C2 = ${glslVec3(PALETTE.skyMid)};
 const vec3 C3 = ${glslVec3(PALETTE.skyHaze)};
 const vec3 C4 = ${glslVec3(PALETTE.skyHorizon)};
 
-// 4x4 Bayer matrix, used to break band edges without softening them.
-float bayer(vec2 p) {
-  int x = int(mod(p.x, 4.0));
-  int y = int(mod(p.y, 4.0));
-  int i = y * 4 + x;
-  float m[16] = float[16](
-     0.0,  8.0,  2.0, 10.0,
-    12.0,  4.0, 14.0,  6.0,
-     3.0, 11.0,  1.0,  9.0,
-    15.0,  7.0, 13.0,  5.0);
-  return m[i] / 16.0 - 0.5;
+/** Cheap 3D-ish value noise on a direction, for perturbing band edges. */
+float dirNoise(vec3 d, float scale) {
+  vec3 p = d * scale;
+  vec3 i = floor(p);
+  vec3 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float n = 0.0;
+  for (int c = 0; c < 8; c++) {
+    vec3 o = vec3(float(c & 1), float((c >> 1) & 1), float((c >> 2) & 1));
+    float w = mix(1.0 - f.x, f.x, o.x) * mix(1.0 - f.y, f.y, o.y) * mix(1.0 - f.z, f.z, o.z);
+    n += hash21((i + o).xy + (i.z + o.z) * 37.0) * w;
+  }
+  return n;
 }
 
 /**
  * Pick one of five flat colours from a 0..1 param (0 = zenith, 1 = horizon).
  *
- * The band edge is displaced by the dither value rather than blended across,
- * so each pixel still lands on exactly one of the five palette colours. At
- * viewing distance the scattered edge reads as a soft transition while the
- * frame remains genuinely flat-shaded — no interpolated in-between tones.
+ * An earlier version dithered the band edges with a Bayer matrix. On a gradient
+ * this shallow the dither zone covered a third of the screen and read as a
+ * checkerboard, which is exactly the mechanical artefact we are trying to
+ * avoid. What a background painter actually does is lay down flat bands with a
+ * slightly wandering, hand-cut edge — so instead the boundary itself is
+ * displaced by low-frequency noise, and each pixel still resolves to exactly
+ * one of the five palette colours.
  */
-vec3 bandedSky(float t, float dither) {
-  float x = clamp(t, 0.0, 1.0) * 4.0 + dither * 0.85;
-  int i = int(clamp(floor(x), 0.0, 3.0));
+vec3 bandedSky(float t, float wobble) {
+  float x = clamp(t + wobble, 0.0, 1.0) * 4.0;
+  float fi = clamp(floor(x), 0.0, 3.0);
+  int i = int(fi);
   vec3 a = i == 0 ? C0 : i == 1 ? C1 : i == 2 ? C2 : C3;
   vec3 b = i == 0 ? C1 : i == 1 ? C2 : i == 2 ? C3 : C4;
-  return fract(clamp(x, 0.0, 4.0)) > 0.5 ? b : a;
+  // A 1-2 pixel smoothstep across the edge, no more: enough to stop the band
+  // boundary aliasing into a staircase, far too narrow to read as a gradient.
+  float e = fwidth(x) * 0.8;
+  return mix(a, b, smoothstep(0.5 - e, 0.5 + e, fract(x)));
 }
 
 void main() {
   vec3 d = normalize(vDir);
-  float h = clamp(d.y, -0.25, 1.0);
 
   // 0 at the zenith, 1 at the horizon. The pow() compresses the gradient down
   // towards the horizon, where the camera actually spends its time — the top
   // of the dome stays a single deep cobalt field.
-  float t = 1.0 - pow(clamp(h, 0.0, 1.0), 0.52);
+  float t = 1.0 - pow(clamp(d.y, 0.0, 1.0), 0.52);
 
-  float dith = bayer(gl_FragCoord.xy);
-  vec3 col = bandedSky(t, dith);
+  // Two octaves of wobble: a long one that gives each band a lazy sweep, and a
+  // shorter one that roughens the cut. Amplitude is small — the bands must
+  // still read as horizontal, just not as ruled lines.
+  float wobble = (dirNoise(d, 2.6) - 0.5) * 0.075 + (dirNoise(d, 7.3) - 0.5) * 0.028;
+  vec3 col = bandedSky(t, wobble);
 
-  // Warm glow packed around the sun, quantised into three steps so it stays a
-  // graphic shape instead of a soft photographic bloom.
+  // Warm glow around the sun in two quantised tiers: a tight bright core wash
+  // and a broad faint one. Both are stepped and both inherit the band wobble
+  // above, so the glow belongs to the painted sky rather than sitting on top of
+  // it as a soft photographic bloom.
   float sd = max(dot(d, normalize(uSunDir)), 0.0);
-  float glow = pow(sd, 12.0);
-  glow = floor(glow * 3.0 + dith * 0.3) / 3.0;
-  col = mix(col, ${glslVec3(PALETTE.sun)}, glow * 0.5);
+  float tight = floor(pow(sd, 30.0) * 3.0 + 0.15) / 3.0;
+  float broad = floor((pow(sd, 5.0) + wobble * 0.5) * 2.0 + 0.1) / 2.0;
+  col = mix(col, ${glslVec3(PALETTE.skyHaze)}, clamp(broad, 0.0, 1.0) * 0.30);
+  col = mix(col, ${glslVec3(PALETTE.sun)}, tight * 0.66);
 
   // A single hard haze band riding the horizon line, which gives the ocean
-  // something to meet instead of fading into nothing.
-  float band = 1.0 - smoothstep(0.0, 0.042, abs(d.y - 0.008));
-  col = mix(col, C4, band * 0.55);
+  // something to meet instead of fading into nothing. It wobbles with the same
+  // noise so it belongs to the same painted sky.
+  float hy = d.y - 0.006 + wobble * 0.16;
+  float band = 1.0 - smoothstep(0.0, 0.030, abs(hy));
+  col = mix(col, C4, band * 0.6);
 
   outColor = vec4(col, 1.0);
   // Sky writes a null normal so the Sobel pass leaves it alone.
@@ -313,35 +331,41 @@ void main() {
   float thr = 1.0 - uCoverage;
 
   float body = cloudDensity(d, vec2(0.0));
-  // The lit rim: sample the field shifted *towards* the sun. Where the shifted
-  // sample is outside the cloud but the base sample is inside, we are on the
-  // sun-facing edge.
-  vec2 sunBias = normalize(uSunDir.xz) * 0.030;
-  float shifted = cloudDensity(d, sunBias);
-
   float inside = step(thr, body);
   if (inside < 0.5) { outColor = vec4(0.0); outNormalDepth = vec4(0.0, 0.0, 0.0, 1.0); return; }
 
-  float rim = step(shifted, thr);                 // sun-facing hard rim
-  float core = step(thr + 0.085, body);           // dense interior
-  float deep = step(thr + 0.155, body);           // shadowed underbelly
+  // The lit rim: sample the field shifted *towards* the sun. Where the shifted
+  // sample has fallen outside the cloud but this one is still inside, we are
+  // standing on the sun-facing edge. The shift distance IS the rim width, so it
+  // has to be small — an early version used 0.030 and lit half of every cloud.
+  vec2 sunBias = normalize(uSunDir.xz) * 0.0075;
+  float shifted = cloudDensity(d, sunBias);
 
-  vec3 col = CLOUD_MID;
-  col = mix(col, CLOUD_SHADE, core * (1.0 - rim));
-  col = mix(col, CLOUD_SHADE * 0.88, deep * (1.0 - rim));
+  // Three tones plus the rim. Clouds painted with a single tone read as paper
+  // cut-outs; three gives them just enough form to sit in the sky without ever
+  // becoming volumetric.
+  float rim = step(shifted, thr);
+  float mid = step(thr + 0.045, body);
+  float deep = step(thr + 0.115, body);
+
+  vec3 col = CLOUD_LIT;
+  col = mix(col, CLOUD_MID, mid);
+  col = mix(col, CLOUD_SHADE, deep);
+  // The rim overwrites whatever tone is underneath — it is the brightest thing
+  // in the sky after the sun itself.
   col = mix(col, CLOUD_LIT, rim);
 
-  // Clouds close to the sun pick up its warmth on the rim only.
+  // Clouds close to the sun pick up its warmth, on the rim only.
   float sd = max(dot(d, normalize(uSunDir)), 0.0);
-  col = mix(col, SUN_TINT, rim * pow(sd, 3.0) * 0.85);
+  col = mix(col, SUN_TINT, rim * pow(sd, 2.5) * 0.9);
 
   // Soften only the outermost pixel of the silhouette so the edge is crisp but
   // not aliased into a staircase.
-  float alpha = smoothstep(thr, thr + 0.012, body);
+  float alpha = smoothstep(thr, thr + fwidth(body) * 1.5 + 0.002, body);
   // Distant clouds thin out towards the horizon haze.
-  alpha *= smoothstep(0.03, 0.13, d.y);
+  alpha *= smoothstep(0.025, 0.12, d.y);
 
-  outColor = vec4(col, alpha * 0.96);
+  outColor = vec4(col, alpha * 0.97);
   outNormalDepth = vec4(0.0, 0.0, 0.0, 1.0);
 }
 `;
@@ -361,28 +385,48 @@ uniform float uTime;
 const vec3 CORE = ${glslVec3(PALETTE.sunCore)};
 const vec3 GLOW = ${glslVec3(PALETTE.sun)};
 
+/**
+ * One set of hard-edged, radially tapering rays.
+ *
+ * Built as angular wedges whose half-width shrinks quadratically towards the
+ * tip, then hard-stepped. A pow(cos(ang*n), k) star — the obvious approach —
+ * produces fat rounded lobes that read as a pinwheel, because the falloff is in
+ * the wrong domain: it narrows the ray with angle, not with radius. Tapering
+ * the wedge with radius is what makes a ray look drawn with a brush.
+ */
+float rays(float ang, float r, float count, float phase, float len, float halfWidth) {
+  float seg = 6.2831853 / count;
+  float a = mod(ang + phase + seg * 0.5, seg) - seg * 0.5;
+  float radial = clamp(1.0 - r / len, 0.0, 1.0);
+  float w = halfWidth * radial * radial;
+  return step(abs(a), w);
+}
+
 void main() {
   vec2 p = vUv * 2.0 - 1.0;
   float r = length(p);
   float ang = atan(p.y, p.x);
 
-  // Hard core disc with a single crisp ring just outside it.
-  float disc = 1.0 - smoothstep(0.155, 0.175, r);
-  float ring = (1.0 - smoothstep(0.235, 0.252, r)) * smoothstep(0.205, 0.222, r);
+  // A solid core that runs straight into its warm collar with no gap. An
+  // earlier build separated the disc from its ring, which read as an eyeball.
+  float core = 1.0 - smoothstep(0.138, 0.148, r);
+  float collar = 1.0 - smoothstep(0.186, 0.196, r);
 
-  // Quantised halo: four discrete steps rather than a smooth falloff.
-  float halo = 1.0 - smoothstep(0.16, 0.95, r);
-  halo = floor(halo * 4.0) / 4.0;
+  // There is deliberately no halo disc on this quad. Quantising a radial
+  // falloff into steps produced concentric hard-edged rings that read as a UI
+  // element pasted over the sky. The atmospheric glow around the sun is
+  // handled by the dome shader instead, where it can be occluded by cloud and
+  // wobbles with the same noise as the sky bands, plus the bloom pass.
 
-  // Six-spoke star. The spokes breathe very slightly so the sun feels alive
-  // without ever becoming a photographic anamorphic streak.
-  float spokes = pow(abs(cos(ang * 3.0)), 26.0);
-  float breathe = 0.86 + 0.14 * sin(uTime * 0.9);
-  float star = spokes * (1.0 - smoothstep(0.1, 0.92 * breathe, r));
-  star = floor(star * 3.0 + 0.2) / 3.0;
+  // Four long rays and four short ones offset by 45 degrees. The asymmetry is
+  // what stops it reading as a lens artefact.
+  float breathe = 0.92 + 0.08 * sin(uTime * 0.8);
+  float longRays = rays(ang, r, 4.0, 0.0, 0.88 * breathe, 0.085);
+  float shortRays = rays(ang, r, 4.0, 0.7853982, 0.42 * breathe, 0.115);
+  float star = max(longRays, shortRays) * step(0.10, r);
 
-  float a = clamp(disc + ring * 0.85 + halo * 0.30 + star * 0.42, 0.0, 1.0);
-  vec3 col = mix(GLOW, CORE, clamp(disc + star * 0.4, 0.0, 1.0));
+  float a = clamp(core + collar * 0.92 + star * 0.62, 0.0, 1.0);
+  vec3 col = mix(GLOW, CORE, clamp(core + collar * 0.5 + star * 0.25, 0.0, 1.0));
 
   outColor = vec4(col * a, a);
   outNormalDepth = vec4(0.0, 0.0, 0.0, 1.0);

@@ -218,6 +218,7 @@ export const SHOTS = [
   // -------------------------------------------------------------------------
   {
     id: 'race-01-grid',
+    includeHud: true,
     group: 'race',
     time: 1.0,
     camera: { mode: 'flyby' },
@@ -245,6 +246,7 @@ export const SHOTS = [
   // -------------------------------------------------------------------------
   {
     id: 'hud-01-race',
+    includeHud: true,
     group: 'hud',
     time: 32.0,
     camera: { mode: 'chase' },
