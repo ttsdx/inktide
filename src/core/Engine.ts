@@ -170,10 +170,9 @@ export class Engine {
     this.pipeline.setSize(w, h, pr);
     this.lastPixelRatio = pr;
 
-    // Screen-constant outline width needs the framebuffer height and the
-    // projection's vertical scale (= 1/tan(fov/2)).
-    const projScaleY = this.camera.projectionMatrix.elements[5];
-    updateOutlineViewport(h * pr, projScaleY, this.camera.far);
+    // Screen-constant outline width is computed in clip space, so the shells
+    // only need the framebuffer dimensions in device pixels.
+    updateOutlineViewport(w * pr, h * pr, this.camera.far);
   }
 
   get pixelRatio(): number {

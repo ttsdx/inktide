@@ -4,6 +4,7 @@ import {
   Color,
   Mesh,
   Object3D,
+  Vector2,
   Vector3,
   type Material,
 } from 'three';
@@ -121,12 +122,30 @@ export interface OutlineOptions {
 /** All live outline materials, so the engine can push viewport uniforms once. */
 const registry = new Set<OutlineMaterial>();
 
-export function updateOutlineViewport(viewportHeight: number, projScaleY: number, far: number): void {
-  for (const m of registry) {
-    m.uniforms.uViewportHeight.value = viewportHeight;
-    m.uniforms.uProjScaleY.value = projScaleY;
-    m.uniforms.uCameraFar.value = far;
-  }
+/**
+ * Last viewport pushed by the engine. Outline shells are created lazily as the
+ * world is built, long after the engine's first resize, so a new shell has to
+ * be able to catch up on the current framebuffer size immediately — otherwise
+ * it renders its line at the default 1920x1080 scale and comes out visibly
+ * thinner or fatter than every other line in the frame.
+ */
+const viewportState = { width: 1920, height: 1080, far: 4000 };
+
+function applyViewport(m: OutlineMaterial): void {
+  (m.uniforms.uViewport.value as Vector2).set(viewportState.width, viewportState.height);
+  m.uniforms.uViewportHeight.value = viewportState.height;
+  m.uniforms.uCameraFar.value = viewportState.far;
+}
+
+export function updateOutlineViewport(
+  viewportWidth: number,
+  viewportHeight: number,
+  far: number,
+): void {
+  viewportState.width = viewportWidth;
+  viewportState.height = viewportHeight;
+  viewportState.far = far;
+  for (const m of registry) applyViewport(m);
 }
 
 export function setOutlineHaze(near: number, far: number): void {
@@ -150,6 +169,7 @@ export function attachOutline(mesh: Mesh, opts: OutlineOptions = {}): Mesh {
   });
   mat.uniforms.uDistanceTaper.value = opts.distanceTaper ?? 0.62;
   registry.add(mat);
+  applyViewport(mat);
 
   const shell = new Mesh(geo, mat);
   shell.name = `${mesh.name || 'mesh'}_ink`;

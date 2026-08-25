@@ -16,7 +16,7 @@ import {
 import { FullScreenPass } from './FullScreenPass.ts';
 import { PALETTE } from '../core/Palette.ts';
 import { glslVec3 } from './shaderLib.ts';
-import { LAYER_OCEAN, LAYER_OPAQUE, LAYER_OVERLAY } from './layers.ts';
+import { LAYER_OCEAN, LAYER_OPAQUE, LAYER_OVERLAY, LAYER_SKY } from './layers.ts';
 
 /**
  * THE POST CHAIN
@@ -201,6 +201,10 @@ export class CelPipeline {
         uTime: { value: 0 },
         uFlash: { value: 0 },
         uFlashColor: { value: new Color(1, 1, 1) },
+        // 0 = normal output, 1 = packed normals, 2 = linear depth,
+        // 3 = the isolated line mask. Driven by the harness and the ?debug flag.
+        uDebugView: { value: 0 },
+        tDebug: { value: null },
       },
       'CelComposite',
     );
@@ -236,6 +240,21 @@ export class CelPipeline {
     return this.main.textures[1];
   }
 
+  setDebugView(mode: number): void {
+    this.compositePass.uniforms.uDebugView.value = mode;
+  }
+
+  /** Poke a single pass uniform by name. Used for tuning sweeps from the harness. */
+  setPassUniform(pass: string, name: string, value: number): void {
+    const target: Record<string, FullScreenPass> = {
+      sobel: this.sobelPass,
+      bright: this.brightPass,
+      composite: this.compositePass,
+    };
+    const p = target[pass];
+    if (p && p.uniforms[name]) p.uniforms[name].value = value;
+  }
+
   /** Trigger a one-frame full-screen colour flash (boost pickup, hard landing). */
   flash(color: Color, strength: number): void {
     (this.compositePass.uniforms.uFlashColor.value as Color).copy(color);
@@ -261,23 +280,29 @@ export class CelPipeline {
       this.stats.triangles += r.info.render.triangles;
     };
 
-    // --- 1a. opaque slice (sky, hulls, riders, props) into the MRT target ---
+    // --- 1a. sky slice. Quarantined so its transparent, depth-test-disabled
+    //         cloud and sun quads cannot paint over the world or erase the
+    //         normal buffer (see the note in layers.ts).
     r.setRenderTarget(this.main);
-    r.autoClear = true;
-    camera.layers.set(LAYER_OPAQUE);
+    r.autoClear = false;
     r.clear(true, true, true);
+    camera.layers.set(LAYER_SKY);
     r.render(scene, camera);
     tally();
 
-    // --- 1b. copy the packed normal/depth attachment so the water can read it
+    // --- 1b. opaque slice (hulls, riders, props) into the same MRT target ---
+    camera.layers.set(LAYER_OPAQUE);
+    r.render(scene, camera);
+    tally();
+
+    // --- 1c. copy the packed normal/depth attachment so the water can read it
     //         while still writing to the same attachment.
     this.copyPass.uniforms.tColor.value = this.main.textures[1];
     this.copyPass.render(r, this.depthCopy);
     this.onDepthReady?.(this.depthCopy.texture, w, h);
 
-    // --- 1c. ocean, then transparent overlays. No clear: both slices must
+    // --- 1d. ocean, then transparent overlays. No clear: both slices must
     //         depth-test against the opaque geometry already in the buffer.
-    r.autoClear = false;
     r.setRenderTarget(this.main);
     camera.layers.set(LAYER_OCEAN);
     r.render(scene, camera);
@@ -337,6 +362,7 @@ export class CelPipeline {
     const cu = this.compositePass.uniforms;
     cu.tColor.value = colorTex;
     cu.tBloom.value = bloomTex;
+    cu.tDebug.value = this.main.textures[1];
     cu.uBloomStrength.value = this.quality.bloom ? 0.42 : 0;
     (cu.uTexel.value as Vector2).copy(texel);
     cu.uTime.value = elapsed;
@@ -508,6 +534,8 @@ layout(location = 0) out vec4 outColor;
 
 uniform sampler2D tColor;
 uniform sampler2D tBloom;
+uniform sampler2D tDebug;
+uniform float uDebugView;
 uniform float uBloomStrength;
 uniform float uVignette;
 uniform float uSaturation;
@@ -526,6 +554,15 @@ vec3 linearToSRGB(vec3 c) {
 }
 
 void main() {
+  // Debug taps. Verifying "the MRT normal buffer is populated" by reading the
+  // shader source is exactly the kind of assumption this project is not allowed
+  // to make, so the buffer is directly viewable instead.
+  if (uDebugView > 0.5) {
+    vec4 nd = texture(tDebug, vUv);
+    if (uDebugView < 1.5) { outColor = vec4(nd.rgb, 1.0); return; }
+    if (uDebugView < 2.5) { outColor = vec4(vec3(nd.w * 12.0), 1.0); return; }
+  }
+
   vec3 c = texture(tColor, vUv).rgb * uExposure;
 
   if (uBloomStrength > 0.0) {

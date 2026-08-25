@@ -5,7 +5,8 @@ import { CameraRig, type CameraMode, type ChaseTarget } from './core/CameraRig.t
 import { Sky } from './world/Sky.ts';
 import { Ocean } from './world/Ocean.ts';
 import { sampleOcean } from './world/gerstner.ts';
-import { LAYER_OPAQUE } from './render/layers.ts';
+import { LAYER_OPAQUE, LAYER_SKY } from './render/layers.ts';
+import { ProbeScene } from './dev/ProbeScene.ts';
 
 /**
  * Top-level game object. Owns the engine, the world and the race, and is the
@@ -31,6 +32,7 @@ export class Game {
 
   private started = false;
   private paused = false;
+  private probe: ProbeScene | null = null;
 
   /** Fake chase target until the player boat exists. */
   private dummyTarget: ChaseTarget = {
@@ -67,12 +69,17 @@ export class Game {
   async init(): Promise<void> {
     const scene = this.engine.scene;
 
-    this.sky.group.traverse((o) => o.layers.set(LAYER_OPAQUE));
+    this.sky.group.traverse((o) => o.layers.set(LAYER_SKY));
     scene.add(this.sky.group);
     scene.add(this.ocean.mesh);
 
     // The ocean samples the copied scene depth for its waterline foam.
     this.engine.pipeline.onDepthReady = (tex, w, h) => this.ocean.setSceneDepth(tex, w, h);
+
+    if (new URL(window.location.href).searchParams.get('probe') === '1') {
+      this.probe = new ProbeScene();
+      scene.add(this.probe.root);
+    }
 
     this.rig.mode = 'orbit';
     this.rig.orbitCenter.set(0, 1.5, 0);
@@ -90,6 +97,29 @@ export class Game {
     if (this.started) return;
     this.started = true;
     this.engine.start();
+  }
+
+  /**
+   * Push the camera up out of the water.
+   *
+   * A spring chase cam sitting 4 m above a boat will still be swallowed by a
+   * 3.5 m swell crest at the wrong moment, and because the ocean is single
+   * sided the frame it happens on shows straight through the surface. Rather
+   * than paying for a two-sided ocean and an underwater look for two frames a
+   * minute, the camera is simply not allowed below the surface.
+   *
+   * The clamp is applied as a floor with a soft approach rather than a hard
+   * snap, so a crest sliding under the camera lifts it smoothly instead of
+   * stepping it.
+   */
+  private keepCameraAboveWater(elapsed: number): void {
+    const cam = this.engine.camera;
+    const s = sampleOcean(cam.position.x, cam.position.z, elapsed);
+    const floorY = s.height + 1.15;
+    if (cam.position.y < floorY) {
+      cam.position.y = floorY;
+      cam.updateMatrixWorld();
+    }
   }
 
   /**
@@ -112,7 +142,9 @@ export class Game {
     this.dummyTarget.position.y = s.height;
     this.rig.orbitCenter.y = s.height + 1.5;
 
+    this.probe?.update(elapsed);
     this.rig.update(dt, this.dummyTarget, elapsed);
+    this.keepCameraAboveWater(elapsed);
     this.sky.update(this.engine.camera, elapsed);
     this.ocean.update(this.engine.camera, elapsed);
   };
@@ -193,6 +225,16 @@ export class Game {
 
     setQuality: (tier: QualityTier): void => {
       this.engine.setTier(tier);
+    },
+
+    /** 0 = beauty, 1 = packed view normals, 2 = linear depth. */
+    setDebugView: (mode: number): void => {
+      this.engine.pipeline.setDebugView(mode);
+    },
+
+    /** Tweak any pipeline pass uniform by name, for tuning sweeps. */
+    setPassUniform: (pass: string, name: string, value: number): void => {
+      this.engine.pipeline.setPassUniform(pass, name, value);
     },
 
     stats: () => ({

@@ -726,15 +726,13 @@ export function triangle(
   ink?: string,
   line = 2,
 ): void {
+  // A dart rather than an equilateral triangle: the tail notch is what makes the
+  // facing readable at eight pixels tall.
   const p = new Path2D();
-  for (let i = 0; i < 3; i++) {
-    const a = angle + (i * Math.PI * 2) / 3;
-    const r = i === 0 ? size : size * 0.72;
-    const px = cx + Math.cos(a) * r;
-    const py = cy + Math.sin(a) * r;
-    if (i === 0) p.moveTo(px, py);
-    else p.lineTo(px, py);
-  }
+  p.moveTo(cx + Math.cos(angle) * size * 1.35, cy + Math.sin(angle) * size * 1.35);
+  p.lineTo(cx + Math.cos(angle + 2.42) * size, cy + Math.sin(angle + 2.42) * size);
+  p.lineTo(cx - Math.cos(angle) * size * 0.34, cy - Math.sin(angle) * size * 0.34);
+  p.lineTo(cx + Math.cos(angle - 2.42) * size, cy + Math.sin(angle - 2.42) * size);
   p.closePath();
   c.save();
   c.fillStyle = fill;

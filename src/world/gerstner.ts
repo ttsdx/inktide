@@ -110,8 +110,17 @@ export const MAX_WAVE_HEIGHT = WAVES.reduce((s, w) => s + w.amplitude, 0);
 export const oceanParams = {
   /** Global height scale. 1.0 = the table above. */
   amplitude: 0.92,
-  /** Horizontal pinch scale. >1 sharpens crests without raising them. */
-  choppiness: 1.16,
+  /**
+   * Horizontal pinch scale. >1 sharpens crests without raising them.
+   *
+   * The real steepness budget is TOTAL_STEEPNESS * amplitude * choppiness, and
+   * it must stay under 1.0 or the displacement map folds back through itself
+   * and the surface self-intersects. 0.7148 * 0.92 * 1.34 = 0.881, which sits
+   * close enough to the limit to give genuinely peaked crests over round
+   * troughs — the Wave Race silhouette — with enough margin that the CPU
+   * sampler's three fixed-point inversion steps still converge.
+   */
+  choppiness: 1.34,
   /** Global time scale. */
   timeScale: 1.0,
 };

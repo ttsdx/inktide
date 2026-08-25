@@ -5,6 +5,7 @@ import {
   FrontSide,
   GLSL3,
   ShaderMaterial,
+  Vector2,
   type IUniform,
   type Texture,
 } from 'three';
@@ -209,6 +210,7 @@ export class OutlineMaterial extends ShaderMaterial {
       uniforms: {
         uInk: { value: (opts.color ?? PALETTE.ink).clone() },
         uWidthPx: { value: opts.widthPx ?? 2.4 },
+        uViewport: { value: new Vector2(1920, 1080) },
         uViewportHeight: { value: 1080 },
         uProjScaleY: { value: 1.0 },
         uCameraFar: { value: 4000 },
@@ -231,8 +233,7 @@ precision highp float;
 in vec3 outlineNormal;
 
 uniform float uWidthPx;
-uniform float uViewportHeight;
-uniform float uProjScaleY;
+uniform vec2 uViewport;
 uniform float uDistanceTaper;
 
 out float vViewDepth;
@@ -244,28 +245,41 @@ void main() {
   float depth = max(-viewPos.z, 0.001);
   vViewDepth = depth;
 
-  // Smoothed normal in view space — pushing in view space keeps the line width
-  // uniform even on geometry that is scaled non-uniformly.
   vec3 nView = normalize(normalMatrix * outlineNormal);
   vViewNormal = nView;
 
-  // World units per pixel at this depth:
-  //   halfHeightAtDepth = depth / projScaleY   (projScaleY = 1/tan(fov/2))
-  //   unitsPerPixel     = 2 * halfHeightAtDepth / viewportHeight
-  float unitsPerPixel = (2.0 * depth) / (uProjScaleY * uViewportHeight);
+  vec4 clip = projectionMatrix * viewPos;
+
+  // THE PUSH IS DONE IN CLIP SPACE, NOT VIEW SPACE.
+  //
+  // Pushing along the view-space normal and scaling by depth gets the *depth*
+  // half of the problem right, but it still loses width wherever the normal
+  // tilts away from the screen plane: at a box's silhouette edge the smoothed
+  // normal points diagonally, so only ~60% of the push lands laterally and the
+  // line comes out thin. Projecting the normal into clip space and normalising
+  // it there gives a displacement that is purely lateral by construction, so
+  // the line is exactly uWidthPx wide at every silhouette on every shape.
+  vec3 clipNormal = normalize((projectionMatrix * vec4(nView, 0.0)).xyz);
+  vec2 dir = clipNormal.xy;
+  float len = length(dir);
+  // Vertices whose normal points almost straight at or away from the camera are
+  // not on a silhouette; nudging them in an arbitrary direction would make the
+  // shell poke through the surface, so they are pushed by an amount that falls
+  // off with how face-on they are.
+  dir = len > 1e-5 ? dir / len : vec2(0.0);
+  float facing = smoothstep(0.0, 0.35, len);
 
   // Taper: at uDistanceTaper = 1 the line is exactly uWidthPx everywhere. Below
-  // 1 the line narrows with distance, which reads better in a crowded frame.
-  float taper = mix(1.0, clamp(28.0 / depth, 0.35, 1.0), 1.0 - uDistanceTaper);
-  float push = uWidthPx * unitsPerPixel * taper;
+  // 1 the line narrows with distance, which stops a distant pack of boats
+  // turning into a black smear.
+  float taper = mix(1.0, clamp(30.0 / depth, 0.30, 1.0), 1.0 - uDistanceTaper);
 
-  // Flatten the z component of the push slightly so silhouettes facing the
-  // camera do not balloon towards the viewer and clip through the surface.
-  vec3 offset = nView * push;
-  offset.z *= 0.35;
+  // One pixel spans 2/viewport units of NDC; multiplying by clip.w cancels the
+  // perspective divide so the offset survives as pixels.
+  vec2 ndcPerPixel = 2.0 / uViewport;
+  clip.xy += dir * (uWidthPx * taper * facing) * ndcPerPixel * clip.w;
 
-  viewPos.xyz += offset;
-  gl_Position = projectionMatrix * viewPos;
+  gl_Position = clip;
 }
 `;
 

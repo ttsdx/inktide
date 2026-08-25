@@ -231,6 +231,19 @@ vec3 bandedSky(float t, float wobble) {
 void main() {
   vec3 d = normalize(vDir);
 
+  // Below the horizon the dome is only ever visible through a gap in the ocean
+  // — the frame or two where a chase cam clips a wave crest, or the backfaces
+  // of the disc when the camera is briefly submerged. Painting it deep water
+  // blue makes those frames read as "under a wave" instead of flashing the
+  // horizon's warm sand across the bottom of the screen.
+  if (d.y < 0.0) {
+    float depth = clamp(-d.y * 2.4, 0.0, 1.0);
+    vec3 under = mix(${glslVec3(PALETTE.waterMid)}, ${glslVec3(PALETTE.waterDeep)}, floor(depth * 3.0 + 0.2) / 3.0);
+    outColor = vec4(under, 1.0);
+    outNormalDepth = vec4(0.0, 0.0, 0.0, 1.0);
+    return;
+  }
+
   // 0 at the zenith, 1 at the horizon. The pow() compresses the gradient down
   // towards the horizon, where the camera actually spends its time — the top
   // of the dome stays a single deep cobalt field.

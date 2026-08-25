@@ -25,11 +25,18 @@ import { chromium } from '@playwright/test';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { SHOTS, SHOT_GROUPS } from './shots.mjs';
-
+import { fileURLToPath, pathToFileURL } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
+
+// The shot list is swappable so a subsystem can keep its own adversarial angles
+// without editing the shared list.
+const shotFileArg = process.argv.includes('--shotfile')
+  ? process.argv[process.argv.indexOf('--shotfile') + 1]
+  : 'tools/shots.mjs';
+const { SHOTS, SHOT_GROUPS } = await import(
+  pathToFileURL(path.resolve(ROOT, shotFileArg)).href,
+);
 
 // ---------------------------------------------------------------------------
 // args
@@ -47,6 +54,7 @@ function parseArgs(argv) {
     list: false,
     quality: 'ultra',
     keepOpen: false,
+    probe: false,
     timeout: 120000,
   };
   for (let i = 2; i < argv.length; i++) {
@@ -60,6 +68,8 @@ function parseArgs(argv) {
     else if (a === '--shots') out.groups = next().split(',').map((s) => s.trim());
     else if (a === '--only') out.only = next().split(',').map((s) => s.trim());
     else if (a === '--quality') out.quality = next();
+    else if (a === '--shotfile') next();
+    else if (a === '--probe') out.probe = true;
     else if (a === '--list') out.list = true;
     else if (a === '--timeout') out.timeout = Number(next());
     else if (a === '--help' || a === '-h') {
@@ -155,6 +165,7 @@ async function main() {
   url.searchParams.set('harness', '1');
   url.searchParams.set('quality', args.quality);
   url.searchParams.set('adaptive', '0');
+  if (args.probe) url.searchParams.set('probe', '1');
 
   console.log(`\nLoading ${url.toString()} at ${args.width}x${args.height} @${args.scale}x`);
   await page.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: args.timeout });
