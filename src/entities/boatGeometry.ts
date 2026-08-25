@@ -1025,7 +1025,10 @@ const SPONSON_TOP = [0.28, 0.3, 0.3, 0.305, 0.31, 0.32, 0.33, 0.34];
  * Returns the outboard x for the given side and the wall's vertical extent, so
  * a decal can be fitted to the panel rather than guessed onto it.
  */
-export function sponsonWallAt(z: number, side: -1 | 1): { x: number; yBottom: number; yTop: number } {
+export function sponsonWallAt(
+  z: number,
+  side: -1 | 1,
+): { xBottom: number; xTop: number; yBottom: number; yTop: number } {
   // Find the span containing z. The table runs bow to stern, so it is
   // descending in z.
   let i = 0;
@@ -1034,8 +1037,17 @@ export function sponsonWallAt(z: number, side: -1 | 1): { x: number; yBottom: nu
   const z1 = SPONSON_Z[i + 1];
   const f = MathUtils.clamp((z - z0) / (z1 - z0 || 1), 0, 1);
 
+  const out = MathUtils.lerp(SPONSON_OUT[i], SPONSON_OUT[i + 1], f);
+
   return {
-    x: MathUtils.lerp(SPONSON_OUT[i], SPONSON_OUT[i + 1], f) * side,
+    // The wall is not vertical: the ring builds its top 5 cm inboard of its
+    // bottom, so it tumbles home as it rises. Both ends are returned because a
+    // decal placed at the single outboard value stands 5 cm proud at the
+    // bottom and is buried 5 cm inside the hull at the top — which is exactly
+    // what happened to the race number, and it showed as the numeral's upper
+    // half simply not being there.
+    xBottom: out * side,
+    xTop: (out - 0.05) * side,
     // The wall proper starts above the bottom chamfer and ends below the top
     // one; the ring above builds those two at +0.13 and -0.05.
     yBottom: MathUtils.lerp(SPONSON_BOT[i], SPONSON_BOT[i + 1], f) + 0.13,

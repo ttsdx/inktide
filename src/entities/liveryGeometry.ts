@@ -114,12 +114,14 @@ function segment(b: Builder, rect: Rect, side: -1 | 1, mirror: boolean, colour: 
     const wall = sponsonWallAt(z, side);
     const t = MathUtils.lerp(PANEL.v0, PANEL.v1, v);
     const y = MathUtils.lerp(wall.yBottom, wall.yTop, t);
+    // Follow the wall's tumblehome. Placing the numeral at a single outboard x
+    // buried its top half 4 cm inside the hull.
+    const x = MathUtils.lerp(wall.xBottom, wall.xTop, t);
 
-    // The wall is close to vertical, so the relief is straight outboard. Inner
-    // face a hair proud of the panel so it never z-fights with it; the outer
-    // face carries the rest.
+    // Inner face a hair proud of the panel so it never z-fights with it; the
+    // outer face carries the relief.
     for (const push of [0.002, RELIEF]) {
-      b.pos.push(wall.x + push * side, y, z);
+      b.pos.push(x + push * side, y, z);
       b.col.push(colour.r, colour.g, colour.b);
     }
   }
