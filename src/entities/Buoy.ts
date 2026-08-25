@@ -25,7 +25,7 @@ import {
 import { celMatcap, defaultCelRamp } from '../render/materials/proceduralTextures.ts';
 import { computeSmoothedNormals } from '../render/OutlineHull.ts';
 import { LAYER_OPAQUE } from '../render/layers.ts';
-import { sampleOcean, type OceanSample } from '../world/gerstner.ts';
+import { detailAt, sampleOcean, type OceanSample } from '../world/gerstner.ts';
 import type { Course } from '../race/Course.ts';
 import type { FrameContext } from '../contracts.ts';
 
@@ -112,6 +112,14 @@ export class BuoyField {
   private readonly lampMaterial: ShaderMaterial;
 
   private readonly focus = new Vector3();
+  /**
+   * Where the camera is, and the fade band the ocean shader is currently using.
+   * A buoy has to be placed on the surface as *drawn*, which past the fade
+   * start is not the same surface the raw sampler reports.
+   */
+  private readonly eye = new Vector3();
+  private fadeStart = 150;
+  private fadeEnd = 900;
   private frame = 0;
 
   constructor(course: Course, opts: BuoyFieldOptions = {}) {
@@ -212,6 +220,17 @@ export class BuoyField {
   }
 
   /**
+   * Tell the field where the camera is and which fade band the ocean material
+   * is running, so each buoy can be placed on the surface the shader will
+   * actually draw underneath it rather than on the undamped one.
+   */
+  setViewer(eye: Vector3, fadeStart: number, fadeEnd: number): void {
+    this.eye.copy(eye);
+    this.fadeStart = fadeStart;
+    this.fadeEnd = fadeEnd;
+  }
+
+  /**
    * Current world position of one buoy: its fixed XZ and its smoothed ride
    * height. The capture harness needs this to frame a waterline close-up, which
    * is the only way to judge whether the float is actually sitting *in* the
@@ -252,7 +271,8 @@ export class BuoyField {
   private writeInstance(i: number, elapsed: number, dt: number): void {
     const x = this.baseX[i];
     const z = this.baseZ[i];
-    sampleOcean(x, z, elapsed, _sample);
+    const detail = detailAt(Math.hypot(x - this.eye.x, z - this.eye.z), this.fadeStart, this.fadeEnd);
+    sampleOcean(x, z, elapsed, _sample, detail);
 
     // Buoys are ~1.8 m tall and moored, so they follow the swell's *slope* but
     // only partially — 0.62 of the geometric tilt. At 1.0 they looked like

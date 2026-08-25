@@ -11,7 +11,7 @@ import { PALETTE } from '../core/Palette.ts';
 import { CelMaterial, makeGlowMaterial } from '../render/materials/CelMaterial.ts';
 import { outlineHierarchy } from '../render/OutlineHull.ts';
 import { LAYER_OPAQUE, LAYER_OVERLAY } from '../render/layers.ts';
-import { sampleOcean, type OceanSample } from '../world/gerstner.ts';
+import { detailAt, sampleOcean, type OceanSample } from '../world/gerstner.ts';
 import type { Checkpoint, Course } from '../race/Course.ts';
 import type { FrameContext } from '../contracts.ts';
 
@@ -221,7 +221,7 @@ export class Gate {
    * consumer of `sampleOcean` exactly; a gate one frame out of step with the
    * water is immediately obvious because the collar rides visibly proud.
    */
-  update(ctx: FrameContext): void {
+  update(ctx: FrameContext, eye: Vector3, fadeStart: number, fadeEnd: number): void {
     const t = ctx.elapsed;
     const dt = ctx.dt;
 
@@ -231,9 +231,20 @@ export class Gate {
     const rx = this.centre.x - _side.x * this.halfWidth;
     const rz = this.centre.z - _side.z * this.halfWidth;
 
-    sampleOcean(lx, lz, t, _left);
-    sampleOcean(rx, rz, t, _right);
-    sampleOcean(this.centre.x, this.centre.z, t, _mid);
+    // Each base gets the surface as the shader draws it *there*. One gate is
+    // 30 m across, so on a long straight its two pylons can sit in visibly
+    // different parts of the fade and a single shared factor would tilt it.
+    const dl = detailAt(Math.hypot(lx - eye.x, lz - eye.z), fadeStart, fadeEnd);
+    const dr = detailAt(Math.hypot(rx - eye.x, rz - eye.z), fadeStart, fadeEnd);
+    const dm = detailAt(
+      Math.hypot(this.centre.x - eye.x, this.centre.z - eye.z),
+      fadeStart,
+      fadeEnd,
+    );
+
+    sampleOcean(lx, lz, t, _left, dl);
+    sampleOcean(rx, rz, t, _right, dr);
+    sampleOcean(this.centre.x, this.centre.z, t, _mid, dm);
 
     // Height: mean of the two pylon bases, biased towards the centre sample so
     // a gate spanning a full crest does not sit in the trough of it.
@@ -432,8 +443,8 @@ export class GateField {
     this.gates[index]?.flashPassed();
   }
 
-  update(ctx: FrameContext): void {
-    for (const g of this.gates) g.update(ctx);
+  update(ctx: FrameContext, eye: Vector3, fadeStart: number, fadeEnd: number): void {
+    for (const g of this.gates) g.update(ctx, eye, fadeStart, fadeEnd);
   }
 
   dispose(): void {

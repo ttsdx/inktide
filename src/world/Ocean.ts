@@ -265,6 +265,18 @@ export class Ocean {
     }
   }
 
+  /**
+   * The distance band over which the vertex shader fades short-wave detail.
+   * Anything that must float has to sample the wave field with the same fade,
+   * so the value has to be readable rather than private to the material.
+   */
+  get detailFade(): { start: number; end: number } {
+    return {
+      start: this.material.uniforms.uDetailFadeStart.value as number,
+      end: this.material.uniforms.uDetailFadeEnd.value as number,
+    };
+  }
+
   update(camera: PerspectiveCamera, elapsed: number): void {
     const u = this.material.uniforms;
     u.uTime.value = elapsed * oceanParams.timeScale;
@@ -427,20 +439,22 @@ void main() {
 
   float dist = length(xz - uCameraXZ);
 
-  // Detail fade: past ~110 m the short chop is smaller than a pixel and only
-  // produces shimmer, so we roll the amplitude of the whole field down towards
-  // the long swell. detail also drives foam/sparkle density in the fragment
-  // shader so distant water settles into flat painted bands.
-  float detail = 1.0 - smoothstep(uDetailFadeStart, uDetailFadeEnd, dist);
+  // Detail fade: past uDetailFadeStart the short chop is smaller than a pixel
+  // and only produces shimmer, so it is rolled away. detail also drives foam
+  // and sparkle density in the fragment shader, so distant water settles into
+  // flat painted bands.
+  //
+  // The fade is applied PER WAVE inside gerstnerEval, weighted by wavelength,
+  // rather than as one multiplier over the whole field. Scaling everything was
+  // both a look bug and a correctness bug: it flattened the swell that gives
+  // the horizon its silhouette, and it moved the surface out from under every
+  // object the CPU sampler had placed on it — by up to two metres at a crest,
+  // which is how gate collars ended up hovering. Anything that must float now
+  // asks sampleOcean() for this same detail value and gets the same surface.
+  float detail = gerstnerDetail(dist, uDetailFadeStart, uDetailFadeEnd);
   vDetail = detail;
 
-  float amp = uAmplitude * mix(0.55, 1.0, detail);
-  // Choppiness falls off harder than amplitude. The horizontal pinch is what
-  // sharpens a crest into a single bright pixel, and a single bright pixel at
-  // 600 m is a firefly that crawls across the frame every time the camera moves.
-  float chop = uChoppiness * mix(0.22, 1.0, detail * detail);
-
-  GerstnerResult g = gerstnerEval(xz, uTime, amp, chop);
+  GerstnerResult g = gerstnerEval(xz, uTime, uAmplitude, uChoppiness, detail);
 
   // The skirt ring stays pinned below the horizon.
   vec3 finalPos = position.y < -50.0 ? world.xyz : g.position;

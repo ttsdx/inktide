@@ -84,6 +84,32 @@ interface WaveDerived extends WaveParam {
   k: number;
   omega: number;
   qa: number; // steepness * amplitude, the horizontal displacement magnitude
+  /** How much of this wave the distance fade is allowed to remove. See below. */
+  fade: number;
+}
+
+/**
+ * How much of a wave the distance fade may take away, from its wavelength.
+ *
+ * Far water has to be damped or the short chop aliases into crawling fireflies,
+ * but the damping must not touch the long swell. Two reasons, one for the look
+ * and one for correctness:
+ *
+ *   The look: the swell is the only thing giving the horizon a silhouette. When
+ *   the fade scaled the whole field the distant sea flattened to a straight
+ *   edge, which is most of why the far field read as a painted backdrop rather
+ *   than as the same ocean continuing.
+ *
+ *   The correctness: only the shader knows the camera, so only the shader can
+ *   apply a distance fade. Everything the fade removes is height that the CPU
+ *   sampler still believes in, and every float placed from the sampler is
+ *   wrong by that amount. Confining the fade to waves that are worth at most a
+ *   few tens of centimetres bounds the damage; passing the same fade factor to
+ *   the sampler (see `sampleOcean`'s `detail` argument) removes it entirely.
+ */
+function fadeWeight(wavelength: number): number {
+  const t = Math.max(0, Math.min(1, (90 - wavelength) / 75));
+  return t * t * (3 - 2 * t);
 }
 
 const DERIVED: WaveDerived[] = WAVES.map((w) => {
@@ -93,6 +119,7 @@ const DERIVED: WaveDerived[] = WAVES.map((w) => {
     k,
     omega: Math.sqrt(GRAVITY * k) * w.speed,
     qa: w.steepness * w.amplitude,
+    fade: fadeWeight(w.wavelength),
   };
 });
 
@@ -149,7 +176,7 @@ const _sample: OceanSample = { height: 0, nx: 0, ny: 1, nz: 0, jacobian: 1 };
  * Evaluate the displaced surface for a *source* grid point.
  * This is the direct forward evaluation, matching the vertex shader exactly.
  */
-function evaluate(px: number, pz: number, t: number, out: OceanSample): OceanSample {
+function evaluate(px: number, pz: number, t: number, out: OceanSample, detail: number): OceanSample {
   const amp = oceanParams.amplitude;
   const chop = oceanParams.choppiness;
 
@@ -168,9 +195,10 @@ function evaluate(px: number, pz: number, t: number, out: OceanSample): OceanSam
     const phase = w.k * (w.dirX * px + w.dirZ * pz) - w.omega * t + w.offset;
     const s = Math.sin(phase);
     const c = Math.cos(phase);
-    const a = w.amplitude * amp;
+    const d = 1 - w.fade * (1 - detail);
+    const a = w.amplitude * amp * d;
     const wa = w.k * a;
-    const qa = w.qa * amp * chop;
+    const qa = w.qa * amp * chop * d;
 
     y += a * s;
 
@@ -198,14 +226,20 @@ function evaluate(px: number, pz: number, t: number, out: OceanSample): OceanSam
 }
 
 /** Horizontal displacement only — used by the fixed-point inversion below. */
-function horizontal(px: number, pz: number, t: number, out: { x: number; z: number }): void {
+function horizontal(
+  px: number,
+  pz: number,
+  t: number,
+  out: { x: number; z: number },
+  detail: number,
+): void {
   const chop = oceanParams.choppiness * oceanParams.amplitude;
   let dx = 0;
   let dz = 0;
   for (let i = 0; i < DERIVED.length; i++) {
     const w = DERIVED[i];
     const phase = w.k * (w.dirX * px + w.dirZ * pz) - w.omega * t + w.offset;
-    const c = Math.cos(phase) * w.qa * chop;
+    const c = Math.cos(phase) * w.qa * chop * (1 - w.fade * (1 - detail));
     dx += w.dirX * c;
     dz += w.dirZ * c;
   }
@@ -222,21 +256,52 @@ const _h = { x: 0, z: 0 };
  * world point (x,z) did not start there. We invert the horizontal displacement
  * with three fixed-point iterations, which converges to well under a centimetre
  * for our steepness budget and costs far less than a search.
+ *
+ * `detail` selects which surface you get, and the choice is not cosmetic:
+ *
+ *   1 (the default) is the true field, identical everywhere and independent of
+ *   the camera. Physics must use this. A boat whose buoyancy changed because
+ *   the player looked away would be indefensible, and boats live inside the
+ *   fade-free radius anyway, so for them the two surfaces are the same surface.
+ *
+ *   Anything less is the field as the vertex shader will actually *draw* it at
+ *   that distance from the camera — see `detailAt`. Things that must appear to
+ *   sit in the water rather than obey it, which is every float and every
+ *   marking on the surface, want this one.
  */
-export function sampleOcean(x: number, z: number, t: number, out: OceanSample = _sample): OceanSample {
+export function sampleOcean(
+  x: number,
+  z: number,
+  t: number,
+  out: OceanSample = _sample,
+  detail = 1,
+): OceanSample {
   let sx = x;
   let sz = z;
   for (let iter = 0; iter < 3; iter++) {
-    horizontal(sx, sz, t, _h);
+    horizontal(sx, sz, t, _h, detail);
     sx = x - _h.x;
     sz = z - _h.z;
   }
-  return evaluate(sx, sz, t, out);
+  return evaluate(sx, sz, t, out, detail);
 }
 
 /** Convenience: just the water height at a world XZ. */
-export function oceanHeight(x: number, z: number, t: number): number {
-  return sampleOcean(x, z, t, _sample).height;
+export function oceanHeight(x: number, z: number, t: number, detail = 1): number {
+  return sampleOcean(x, z, t, _sample, detail).height;
+}
+
+/**
+ * The vertex shader's detail factor at a given distance from the camera.
+ *
+ * Kept here, next to the wave table, rather than in `Ocean` because it is half
+ * of the CPU/GPU contract: the shader's copy is emitted from this same pair of
+ * lines. A float that wants to sit in the drawn surface computes this from its
+ * own distance to the camera and hands it to `sampleOcean`.
+ */
+export function detailAt(distance: number, fadeStart: number, fadeEnd: number): number {
+  const t = Math.max(0, Math.min(1, (distance - fadeStart) / Math.max(1e-4, fadeEnd - fadeStart)));
+  return 1 - t * t * (3 - 2 * t);
 }
 
 // ---------------------------------------------------------------------------
@@ -256,15 +321,15 @@ const f = (n: number) => {
  */
 function waveTableGLSL(): string {
   const a = DERIVED.map((w) => `vec4(${f(w.dirX)}, ${f(w.dirZ)}, ${f(w.amplitude)}, ${f(w.k)})`);
-  const b = DERIVED.map((w) => `vec3(${f(w.omega)}, ${f(w.steepness)}, ${f(w.offset)})`);
+  const b = DERIVED.map((w) => `vec4(${f(w.omega)}, ${f(w.steepness)}, ${f(w.offset)}, ${f(w.fade)})`);
   return `
 const int GERSTNER_COUNT = ${WAVE_COUNT};
 // (dirX, dirZ, amplitude, waveNumber)
 const vec4 GERSTNER_A[GERSTNER_COUNT] = vec4[GERSTNER_COUNT](
   ${a.join(',\n  ')}
 );
-// (omega, steepness, phaseOffset)
-const vec3 GERSTNER_B[GERSTNER_COUNT] = vec3[GERSTNER_COUNT](
+// (omega, steepness, phaseOffset, detailFadeWeight)
+const vec4 GERSTNER_B[GERSTNER_COUNT] = vec4[GERSTNER_COUNT](
   ${b.join(',\n  ')}
 );`;
 }
@@ -290,7 +355,7 @@ struct GerstnerResult {
   float slope;     // 0..1 steepness of the face
 };
 
-GerstnerResult gerstnerEval(vec2 p, float t, float amp, float chop) {
+GerstnerResult gerstnerEval(vec2 p, float t, float amp, float chop, float detail) {
   GerstnerResult r;
 
   vec3 disp = vec3(0.0);
@@ -303,13 +368,16 @@ GerstnerResult gerstnerEval(vec2 p, float t, float amp, float chop) {
 
   for (int i = 0; i < GERSTNER_COUNT; i++) {
     vec4 A = GERSTNER_A[i];
-    vec3 B = GERSTNER_B[i];
+    vec4 B = GERSTNER_B[i];
     vec2 dir = A.xy;
-    float amplitude = A.z * amp;
     float k = A.w;
     float omega = B.x;
     float steep = B.y;
     float phaseOff = B.z;
+    // Short waves fade out with distance; the long swell never does. The
+    // weights come from the wave table so the CPU sampler applies exactly the
+    // same reduction when it is asked for the drawn surface.
+    float amplitude = A.z * amp * (1.0 - B.w * (1.0 - detail));
 
     float phase = k * dot(dir, p) - omega * t + phaseOff;
     float s = sin(phase);
@@ -347,28 +415,28 @@ GerstnerResult gerstnerEval(vec2 p, float t, float amp, float chop) {
 }
 
 // Height-only variant for cheap lookups (ribbons, floats, LOD skirts).
-float gerstnerHeight(vec2 p, float t, float amp) {
+float gerstnerHeight(vec2 p, float t, float amp, float detail) {
   float y = 0.0;
   for (int i = 0; i < GERSTNER_COUNT; i++) {
     vec4 A = GERSTNER_A[i];
-    vec3 B = GERSTNER_B[i];
+    vec4 B = GERSTNER_B[i];
     float phase = A.w * dot(A.xy, p) - B.x * t + B.z;
-    y += A.z * amp * sin(phase);
+    y += A.z * amp * (1.0 - B.w * (1.0 - detail)) * sin(phase);
   }
   return y;
 }
 
 // Invert the horizontal pinch so a world XZ maps back to its source grid point.
 // Matches sampleOcean() on the CPU: three fixed-point iterations.
-vec2 gerstnerUnproject(vec2 worldXZ, float t, float amp, float chop) {
+vec2 gerstnerUnproject(vec2 worldXZ, float t, float amp, float chop, float detail) {
   vec2 p = worldXZ;
   for (int iter = 0; iter < 3; iter++) {
     vec2 d = vec2(0.0);
     for (int i = 0; i < GERSTNER_COUNT; i++) {
       vec4 A = GERSTNER_A[i];
-      vec3 B = GERSTNER_B[i];
+      vec4 B = GERSTNER_B[i];
       float phase = A.w * dot(A.xy, p) - B.x * t + B.z;
-      d += A.xy * (B.y * A.z * amp * chop) * cos(phase);
+      d += A.xy * (B.y * A.z * amp * chop * (1.0 - B.w * (1.0 - detail))) * cos(phase);
     }
     p = worldXZ - d;
   }
@@ -377,7 +445,14 @@ vec2 gerstnerUnproject(vec2 worldXZ, float t, float amp, float chop) {
 
 // Surface height at a true world XZ (unprojects first). Used by the racing-line
 // ribbon and anything else that must sit exactly on the water.
-float gerstnerHeightAtWorld(vec2 worldXZ, float t, float amp, float chop) {
-  return gerstnerHeight(gerstnerUnproject(worldXZ, t, amp, chop), t, amp);
+float gerstnerHeightAtWorld(vec2 worldXZ, float t, float amp, float chop, float detail) {
+  return gerstnerHeight(gerstnerUnproject(worldXZ, t, amp, chop, detail), t, amp, detail);
+}
+
+// The vertex shader's distance fade. Mirrors detailAt() in gerstner.ts; both
+// sides of the CPU/GPU contract have to agree on this curve, not just on the
+// wave table.
+float gerstnerDetail(float dist, float fadeStart, float fadeEnd) {
+  return 1.0 - smoothstep(fadeStart, fadeEnd, dist);
 }
 `;

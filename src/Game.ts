@@ -515,13 +515,19 @@ export class Game {
     this.sky.update(cam, elapsed);
     this.ocean.update(cam, elapsed);
 
+    // Floating props are placed on the surface as the ocean shader draws it at
+    // their distance from the camera, not on the undamped field, so they have
+    // to be updated after the ocean has settled its fade band for this frame.
+    const fade = this.ocean.detailFade;
+
     if (this.gates) {
       const next = director?.get(0)?.nextCheckpoint;
       if (next !== undefined) this.gates.setActiveIndex(next);
-      this.gates.update(ctx);
+      this.gates.update(ctx, cam.position, fade.start, fade.end);
     }
     if (this.buoys) {
       this.buoys.setFocus(focus);
+      this.buoys.setViewer(cam.position, fade.start, fade.end);
       this.buoys.update(ctx);
     }
 
@@ -973,6 +979,19 @@ export class Game {
 
     setPassUniform: (pass: string, name: string, value: number): void => {
       this.engine.pipeline.setPassUniform(pass, name, value);
+    },
+
+    /**
+     * Poke one ocean uniform. Used for differential captures: the cheapest way
+     * to attribute an artefact to a specific term is to shoot the same frame
+     * twice with that term disabled and subtract.
+     *
+     * Note that `Ocean.update` rewrites the wave uniforms from `oceanParams`
+     * every frame, so only the ones it leaves alone can be held this way.
+     */
+    setOceanUniform: (name: string, value: number): void => {
+      const u = this.ocean.material.uniforms[name];
+      if (u) u.value = value;
     },
 
     /** Teleport the player onto the spline, for shots of a specific corner. */

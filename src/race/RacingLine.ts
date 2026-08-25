@@ -361,19 +361,21 @@ void main() {
   vec2 flatXZ = position.xz + aLeft * (aSide * aHalf * uWidthScale);
 
   // Match the ocean's far-field damping exactly, or the ribbon rides a taller
-  // wave field than the water it is supposed to be lying on.
+  // wave field than the water it is supposed to be lying on. "Exactly" now
+  // means calling the same function with the same arguments: this used to
+  // reimplement the fade with its own constants, which differed from the
+  // ocean's, so the ribbon and the water disagreed by tens of centimetres from
+  // a hundred metres out.
   float dist = length(flatXZ - uCameraXZ);
-  float detail = 1.0 - smoothstep(uDetailFadeStart, uDetailFadeEnd, dist);
-  float amp = uAmplitude * mix(0.55, 1.0, detail);
-  float chop = uChoppiness * mix(0.35, 1.0, detail);
+  float detail = gerstnerDetail(dist, uDetailFadeStart, uDetailFadeEnd);
 
   // Invert the horizontal pinch to find the source grid point whose displaced
   // position lands on our authored world XZ, then evaluate the surface there.
   // g.position.xz comes back equal to flatXZ to within the inversion residual,
   // so this gives the water height at the *true* course centreline rather than
   // at wherever the pinch happened to carry a naive sample.
-  vec2 src = gerstnerUnproject(flatXZ, uTime, amp, chop);
-  GerstnerResult g = gerstnerEval(src, uTime, amp, chop);
+  vec2 src = gerstnerUnproject(flatXZ, uTime, uAmplitude, uChoppiness, detail);
+  GerstnerResult g = gerstnerEval(src, uTime, uAmplitude, uChoppiness, detail);
 
   // The local horizontal displacement field. Following a fraction of it makes
   // the ribbon drift with the crests instead of the crests sliding under it.

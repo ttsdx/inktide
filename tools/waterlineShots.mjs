@@ -32,17 +32,31 @@
 export const SHOT_GROUPS = {
   near: 'Stations inside the detail-fade radius',
   far: 'Stations past it',
+  fade: 'Same station with the vertex detail fade on and off',
 };
 
 const station = (index, back = 4, lift = 0.6) => ({ mode: 'station', index, back, lift });
 
-const at = (id, group, index, time, description, back, lift) => ({
+const at = (id, group, index, time, description, back, lift, setup) => ({
   id,
   group,
   time,
   camera: station(index, back, lift),
   description,
+  ...(setup ? { setup } : {}),
 });
+
+/**
+ * The vertex shader rolls the wave amplitude down towards 55% between
+ * uDetailFadeStart and uDetailFadeEnd, to stop far-field chop from shimmering.
+ * The CPU sampler has no such term — it cannot, because buoyancy must not
+ * depend on where the camera is looking. Pushing the fade start beyond the
+ * horizon disables it, so the pair of frames below differ ONLY by that term and
+ * the difference in where the water crosses the staff is exactly the error it
+ * introduces.
+ */
+const FADE_OFF = { setOceanUniform: ['uDetailFadeStart', 1e9] };
+const FADE_ON = { setOceanUniform: ['uDetailFadeStart', 150] };
 
 export const SHOTS = [
   at('wl-0-6m-t7', 'near', 0, 7.0, '6 m. One band = 10 cm.', 3.2, 0.35),
@@ -57,4 +71,12 @@ export const SHOTS = [
   at('wl-1-18m-t19', 'near', 1, 19.0, '18 m at a different wave phase.', 3.4, 0.4),
   at('wl-3-120m-t19', 'far', 3, 19.0, '120 m at a different wave phase.', 3.2, 0.4),
   at('wl-4-320m-t19', 'far', 4, 19.0, '320 m at a different wave phase.', 3.0, 0.4),
+
+  // Differential pairs. Same station, same instant, fade on then off.
+  at('fade-3-120m-on', 'fade', 3, 26.0, '120 m, detail fade active.', 3.2, 0.4, FADE_ON),
+  at('fade-3-120m-off', 'fade', 3, 26.0, '120 m, detail fade disabled.', 3.2, 0.4, FADE_OFF),
+  at('fade-4-320m-on', 'fade', 4, 27.0, '320 m, detail fade active.', 3.0, 0.4, FADE_ON),
+  at('fade-4-320m-off', 'fade', 4, 27.0, '320 m, detail fade disabled.', 3.0, 0.4, FADE_OFF),
+  at('fade-5-700m-on', 'fade', 5, 28.0, '700 m, detail fade active.', 3.0, 0.4, FADE_ON),
+  at('fade-5-700m-off', 'fade', 5, 28.0, '700 m, detail fade disabled.', 3.0, 0.4, FADE_OFF),
 ];

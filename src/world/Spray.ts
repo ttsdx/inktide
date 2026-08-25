@@ -366,7 +366,11 @@ void main() {
   // Kill on water contact using the same field the ocean surface is built
   // from, so a droplet always disappears exactly at the surface it is falling
   // towards rather than at y = 0.
-  float waterY = gerstnerHeightAtWorld(pos.xz, uTime, uAmplitude, uChoppiness);
+  // detail = 1: droplets live for about a second inside the fade-free radius
+  // around whichever boat threw them, and a boat that far away is a handful of
+  // pixels. Carrying the camera in here to shave a centimetre off the death
+  // height of a sub-pixel droplet is not worth the uniform.
+  float waterY = gerstnerHeightAtWorld(pos.xz, uTime, uAmplitude, uChoppiness, 1.0);
   bool drowned = pos.y < waterY;
   bool expired = life01 >= 1.0 || age < 0.0;
 
