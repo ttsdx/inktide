@@ -567,6 +567,19 @@ void main() {
   float fade = 1.0 - smoothstep(uFogNear, uFogFar, vViewDepth);
   alpha *= mix(0.12, 1.0, fade);
 
+  // Fade where the ribbon is edge-on and cannot resolve its own pattern.
+  //
+  // Distance is not the measure — a nearly edge-on stretch three metres away
+  // has a pixel spanning tens of metres along the track, so every chevron
+  // inside it integrates to the same value and the ribbon degenerates into a
+  // solid mass. Seen from the chase camera looking down the line that mass
+  // filled a quarter of the frame with flat mint green. The along-track
+  // derivative measures exactly that, and it is the same test the ocean uses
+  // to decide when its own bands can no longer be drawn.
+  float alongPerPx = fwidth(vAlong);
+  float resolved = 1.0 - smoothstep(uChevronPeriod * 0.6, uChevronPeriod * 2.2, alongPerPx);
+  alpha *= mix(0.14, 1.0, resolved);
+
   outColor = vec4(col, alpha);
   // Null normal, full depth: the Sobel edge pass must not trace the ribbon's
   // outline, and it must not lose the waterline it would otherwise find here.
