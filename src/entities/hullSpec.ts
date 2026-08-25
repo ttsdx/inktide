@@ -62,11 +62,25 @@ export const THRUST_POINT = new Vector3(0, -0.28, -2.35);
 /** Where the rudder pivots; the yaw reference for steering. */
 export const RUDDER_POINT = new Vector3(0, -0.34, -2.5);
 
-/** Cockpit floor the rider stands/sits on. */
+/**
+ * Cockpit floor the rider stands on. The rider rig is authored with its root at
+ * foot level and its bow at local +Z, matching this hull, so it parents here
+ * with no offset or yaw correction.
+ */
 export const RIDER_MOUNT = new Vector3(0, 0.30, -0.28);
 
-/** Handlebar position the rider's hands are IK'd to. */
-export const HANDLEBAR_POINT = new Vector3(0, 1.02, 0.62);
+/**
+ * Handlebar grip position, hull-local.
+ *
+ * This is NOT a free choice. `RiderRig.GRIP` fixes the hand IK targets at
+ * (+/-0.212, 1.02, 0.545) in rider-root space, and the arms are solved by exact
+ * analytic IK to that point — so if the bars are modelled anywhere else the
+ * rider grips air, and does so precisely. The value below is therefore derived:
+ * RIDER_MOUNT + GRIP. Move the mount and this must move with it.
+ */
+export const HANDLEBAR_POINT = new Vector3(0, 0.30 + 1.02, -0.28 + 0.545);
+/** Lateral half-spacing of the two grips, from RiderRig.GRIP.x. */
+export const HANDLEBAR_HALF_SPAN = 0.212;
 
 /** Engine intake / exhaust glow position. */
 export const ENGINE_POINT = new Vector3(0, 0.46, -1.72);
