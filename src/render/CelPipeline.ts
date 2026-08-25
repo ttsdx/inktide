@@ -576,8 +576,38 @@ void main() {
   // through the water in front of them. The relative tolerance matters: at 90 m
   // an absolute epsilon either lets the whole ocean through or eats the lines on
   // anything that is merely close to the waterline.
-  float post = texture(tPostND, vUv).w;
-  if (post < c.w * 0.985) {
+  // Reject if this pixel OR ANY OF ITS NEIGHBOURS is behind water.
+  //
+  // Testing only the centre was not enough. The Sobel kernel is three pixels
+  // wide, so at the waterline it straddles pixels that survived and pixels the
+  // ocean has since covered — and in the pre-ocean buffer that boundary is a
+  // colossal depth step, because on one side there is hull and on the other
+  // there is nothing. The pass drew that step as ink, which appeared in six
+  // captured frames as a thin open trapezoid with two long verticals hanging
+  // beneath the boat, on the open water, attached to nothing. It looked exactly
+  // like CAD construction geometry or a selection marquee, and it is the kind
+  // of artefact a viewer calls unfinished within a second.
+  //
+  // Widening the test to the kernel's own footprint means a line is only drawn
+  // where every sample contributing to it is still visible in the final image.
+  vec2 tk = uTexel * uScale;
+  float postC = texture(tPostND, vUv).w;
+  float postL = texture(tPostND, vUv + vec2(-tk.x, 0.0)).w;
+  float postR = texture(tPostND, vUv + vec2( tk.x, 0.0)).w;
+  float postU = texture(tPostND, vUv + vec2(0.0,  tk.y)).w;
+  float postD = texture(tPostND, vUv + vec2(0.0, -tk.y)).w;
+  float postMin = min(min(postC, postL), min(postR, min(postU, postD)));
+  // A relative test alone cannot see this. Water covering a submerged hull sits
+  // only centimetres in front of it, so at 8 m the difference is 0.1% — nowhere
+  // near the 1.5% the relative threshold needs, and every crease on the drowned
+  // part of the hull was drawn straight through the ocean. That is what the
+  // trapezoid of "construction lines" under the boat actually was: the outline
+  // of its own submerged sponsons, inked onto the foam above them.
+  //
+  // The absolute term is in far-plane units: 1.5e-5 of 4000 m is 6 cm, which is
+  // comfortably above the half-float depth buffer's resolution at these ranges
+  // and far below any gap that could be a real crease.
+  if (postMin < c.w * 0.985 || postMin < c.w - 1.5e-5) {
     outColor = uLineMask > 0.5 ? vec4(1.0) : texture(tColor, vUv);
     return;
   }
