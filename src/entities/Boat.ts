@@ -64,14 +64,10 @@ export class Boat {
    */
   readonly riderMount: Object3D;
   /**
-   * The handlebar assembly, at HANDLEBAR_POINT.
-   *
-   * NOTE FOR INTEGRATION: `RiderRig.GRIP` is expressed in *rider-root* space,
-   * so a rider parented at RIDER_MOUNT solves its hands to hull-local
-   * (+-0.212, 1.32, 0.265) — 0.30 m above and 0.36 m behind HANDLEBAR_POINT.
-   * The two spec points disagree; the bars are built where `hullSpec.ts` says
-   * they are, and this object is exposed so whoever owns the rig can retarget
-   * to the bars that actually exist rather than to a number.
+   * The centre of the handlebar crossbar, for anything that needs the bars in
+   * world space. The rider does not: `RiderRig` solves its hands in rider-root
+   * space, and HANDLEBAR_POINT is derived from RIDER_MOUNT plus that same grip
+   * offset, so the two agree by construction rather than by this object.
    */
   readonly handlebar: Object3D;
 

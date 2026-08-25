@@ -520,6 +520,19 @@ void main() {
   c += texture(uPrev, uv + vec2(0.0, o.y)) * 0.03;
   c += texture(uPrev, uv - vec2(0.0, o.y)) * 0.03;
 
+  // Saturate. The stamp pass blends additively into a half-float target, which
+  // unlike an 8-bit one does not clamp for us, and the difference is not
+  // academic: a boat circling its own wake drove texels to about 3.0, and since
+  // the decay is a multiply it then took three extra lifetimes just to get back
+  // down to 1.0. Every one of those seconds looked identical, because anything
+  // at or above 1.0 shades the same. The result was a wake that read as a solid
+  // white slab and appeared to be immortal — the overhead capture came back as
+  // a filled ring of foam with no ribbon structure left in it at all. Clamping
+  // on read caps the debt at a single frame's deposit, so decay starts working
+  // the instant the boat leaves and re-crossing a wake brightens it to full
+  // rather than into invisible headroom.
+  c = min(c, vec4(1.0));
+
   outColor = vec4(c.r * uShift.z, c.g * uShift.w, 0.0, 1.0);
 }
 `;
@@ -618,9 +631,18 @@ void main() {
 
   if (vIsSplash > 0.5) {
     // A spray droplet landing: a small ring, brightest at its rim.
-    float r = length(vLocal) / max(width, 0.05);
+    //
+    // The radius is wobbled by an angular hash before the ring is cut, not
+    // after, so the tear is in the *shape* rather than a texture laid over a
+    // circle. A perfect circle is the one thing that cannot appear here: the
+    // overhead capture had a machined 2 m ring sitting in the middle of the
+    // ribbon, and a single geometric primitive in a frame of hand-drawn foam
+    // reads as a bug even to someone who could not say why.
+    float ang = atan(vLocal.y, vLocal.x);
+    float wobble = 0.74 + 0.34 * hash21(vec2(floor(ang * 3.5), floor(width * 13.0)));
+    float r = length(vLocal) / max(width * wobble, 0.05);
     float ring = smoothstep(1.0, 0.55, r) * smoothstep(0.15, 0.5, r);
-    float amt = ring * strength;
+    float amt = ring * strength * 0.55;
     outColor = vec4(amt, amt, 0.0, 1.0);
     return;
   }
@@ -645,7 +667,7 @@ void main() {
   // Displaced across the hull by the yaw rate: a boat rotating hard is
   // presenting its flank to the water and throwing foam to the outside.
   float smear = clamp(turn * 1.35, -1.6, 1.6) * (width * 0.85);
-  float churnX = abs(across - smear) / (width * (0.62 + speed01 * 0.22));
+  float churnX = abs(across - smear) / (width * (0.5 + speed01 * 0.16));
   float churn = (1.0 - smoothstep(0.55, 1.15, churnX))
               * (1.0 - smoothstep(width * 0.6, width * 3.4 + 4.0, aft));
   churn *= 0.35 + speed01 * 0.9 + abs(turn) * 0.5;
@@ -660,7 +682,13 @@ void main() {
   // 30 cm blocks and the ribbon came back looking crocheted.
   float grain = 0.88 + 0.24 * hash21(floor(vLocal * 1.4) + floor(uTime * 6.0));
 
-  float amount = (arm * 1.15 + churn * 0.95) * strength * forwardKill * grain;
+  // The arms out-weigh the churn, which is the opposite of how much foam each
+  // one really carries. It is a drawing decision: from above, the pair of
+  // diverging cusp lines is the only part of a wake that says "boat" — the
+  // churn behind the transom is just a bright smear that any moving object
+  // would leave. Weighting the read towards the arms keeps the V legible after
+  // eight seconds of blur have rounded everything off.
+  float amount = (arm * 1.5 + churn * 0.7) * strength * forwardKill * grain;
 
   // Deposit RATE, not deposit, so 60 Hz and 30 Hz lay the same ribbon. The
   // rate rises with speed for a reason that is easy to get wrong: a patch of
@@ -669,7 +697,13 @@ void main() {
   // proportional to speed cancels the dwell time and leaves the density of the
   // ribbon constant, which is what a wake actually looks like. The constant
   // term is what stops a drifting boat from laying nothing at all.
-  amount *= dt * (1.0 + speed01 * 4.0);
+  //
+  // The absolute scale is set so that one pass of the stern lands about 0.7,
+  // not 1.0. Foam that arrives already saturated has nowhere to go, so the
+  // ribbon has no falloff along its length and the blur has no gradient to
+  // work on — it spreads a plateau sideways instead of a ridge, which is how
+  // a six metre trail measured eleven metres wide in the overhead capture.
+  amount *= dt * (0.55 + speed01 * 1.8);
 
   if (amount <= 0.0) discard;
   outColor = vec4(amount, amount * 1.25, 0.0, 1.0);

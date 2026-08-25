@@ -465,7 +465,26 @@ uniform vec3 uInk;
 
 vec3 decodeNormal(vec4 nd) { return nd.xyz * 2.0 - 1.0; }
 
-bool optedOut(vec4 s) { return dot(s.xyz, s.xyz) < 0.0001; }
+/**
+ * Is this pixel exempt from interior lines?
+ *
+ * Two exemption encodings have to be honoured, and both are recognisable by
+ * looking at the *decoded* vector rather than the stored bytes:
+ *
+ *  - The sky, the racing ribbon and the cleared framebuffer store a raw zero or
+ *    near-zero, which decodes to roughly (-1,-1,-1). A visible fragment's view
+ *    normal cannot point away from the camera, so a strongly negative z is a
+ *    reliable tell. (The old test compared the stored value against zero, which
+ *    the *cleared* buffer — ink blue, not black — narrowly failed.)
+ *  - The outline shells store the encoded zero, which decodes to (0,0,0). MSAA
+ *    averaging shortens that towards the neighbouring surface normal without
+ *    rotating it, so a length threshold catches every pixel more than about
+ *    half covered by ink and lets the rest through pointing the right way.
+ */
+bool optedOut(vec4 s) {
+  vec3 dn = s.xyz * 2.0 - 1.0;
+  return dot(dn, dn) < 0.36 || dn.z < -0.35;
+}
 
 /**
  * Resolve an opposite pair of taps.

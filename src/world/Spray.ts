@@ -434,16 +434,34 @@ void main() {
   // what the first version drew — a droplet is more outline than droplet, and
   // the capture came back as a scatter of dark grey pebbles instead of white
   // water. Ink is the last 10%, and everything inside it is foam.
-  float rim = 1.0 - smoothstep(edge * 0.90 - aa, edge * 0.90 + aa, r);
+  float rimRaw = 1.0 - smoothstep(edge * 0.90 - aa, edge * 0.90 + aa, r);
+
+  // Band-limit the ink, and do it explicitly rather than trusting the hard
+  // step to degrade gracefully — it does not.
+  //
+  // The contour is 10% of the radius wide. Once a droplet is small enough on
+  // screen that one pixel covers more than that, the inner and outer
+  // smoothsteps overlap, and their difference stops being a line: it becomes a
+  // partial ink wash over the entire droplet, centre included. Foam mixed
+  // halfway to a navy ink is a mid grey, which is exactly what the burst
+  // capture showed near the horizon — a scatter of grey gravel hanging over
+  // blue water. Below the resolvable width the ink is dropped entirely and the
+  // droplet is drawn as pure foam, which is the same trade an inker makes when
+  // a shape gets too small to outline: you do not draw a thinner line, you stop
+  // drawing the line.
+  float inkVisible = 1.0 - smoothstep(edge * 0.06, edge * 0.18, aa);
+  float rim = mix(1.0, rimRaw, inkVisible);
 
   if (body <= 0.0) discard;
 
   vec3 col = mix(uInk, uFoam * vTint, rim);
   // One shaded crescent on the away side, offset rather than concentric, so
-  // every droplet in a burst is lit from the same direction as the sun.
+  // every droplet in a burst is lit from the same direction as the sun. It
+  // fades out with the ink for the same reason: a two-tone droplet four pixels
+  // across is a one-tone droplet with the wrong tone.
   float shade = smoothstep(edge * 0.52 - aa, edge * 0.52 + aa,
                            length(vQuad - vec2(-0.30, 0.34)));
-  col = mix(col, uFoamShade, shade * rim * 0.65);
+  col = mix(col, uFoamShade, shade * rim * 0.65 * mix(0.35, 1.0, inkVisible));
 
   // Opacity steps through three values and holds. A smooth fade is what makes
   // a particle read as a particle; a drawn droplet is either there or it is

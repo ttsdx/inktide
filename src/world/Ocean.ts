@@ -610,7 +610,17 @@ float foamNoise(vec2 p, float t) {
 
   float big = noiseR(s * 0.021 + vec2(t * 0.009, -t * 0.005));
   float mid = noiseG(s * 0.098 - vec2(t * 0.028, t * 0.017));
-  float fine = noiseA(s * 0.29 + vec2(-t * 0.046, t * 0.038));
+  // The tear octave is sampled in UNsquashed world space, unlike the two above.
+  //
+  // Stretching the fine grain 4:1 as well as the streaks turned the foam edge
+  // into a comb. It hid at low camera angles, where foreshortening squashes the
+  // long axis back towards square, and then appeared in full from directly
+  // above as a regular field of parallel dashes lying across the water like
+  // pencil hatching — a repeating texture, which is the one thing a hand-drawn
+  // surface must never look like. The macro streaks genuinely are directional,
+  // because that is foam being dragged down the face of a wave, but the tear at
+  // the boundary of a foam patch has no direction at all.
+  float fine = noiseA(p * 0.42 + vec2(-t * 0.046, t * 0.038));
   return (big * 0.46 + mid * 0.34 + fine * 0.20) - 0.5;
 }
 
@@ -823,7 +833,18 @@ void main() {
   // the physical condition for a wave to actually break.
   // -----------------------------------------------------------------------
   float fn = foamNoise(p, uTime);
-  float crestSignal = vFold * crestGate;
+  // Foam gets its own, stricter swell gate than the contour above.
+  //
+  // Sharing one gate looked economical and was wrong. The contour wants to
+  // trace every ridge, including the small ones, because that is what gives the
+  // surface its drawn structure. Foam wants only the crests that are actually
+  // breaking. With the contour's gate doing both jobs, a near-vertical camera —
+  // which sees a huge area of water all at full detail, with nothing
+  // foreshortened away — buried about a third of the frame under white
+  // continents. That is stormier than this game ever is, and it destroys the
+  // read of the wake, which has to be the brightest thing on the water.
+  float foamGate = smoothstep(0.5, 0.88, vSwell);
+  float crestSignal = vFold * foamGate;
 
   // -----------------------------------------------------------------------
   // 6. FOAM SOURCE B — THE PERSISTENT WAKE FIELD
@@ -913,7 +934,7 @@ void main() {
   // whole silhouette. Never two, because two tones of white on blue is a
   // sticker; the contour is what makes it look drawn.
   // -----------------------------------------------------------------------
-  float foamSignal = max(max(crestSignal * 1.85, wake * 1.35), max(contact, depthFoam));
+  float foamSignal = max(max(crestSignal * 1.45, wake * 1.35), max(contact, depthFoam));
   // Distant foam loses its detail rather than boiling into noise.
   foamSignal *= mix(0.55, 1.0, detail);
 

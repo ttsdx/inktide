@@ -15,9 +15,14 @@ import { RaceDirector, type RaceEvent } from './race/RaceDirector.ts';
 import { AIController, AI_PRESETS } from './race/AIController.ts';
 import { GateField } from './entities/Gate.ts';
 import { BuoyField } from './entities/Buoy.ts';
+import { Boat } from './entities/Boat.ts';
+import { Spray } from './world/Spray.ts';
 import { BoatPhysics } from './entities/BoatPhysics.ts';
 import { BOAT_SPECS, HULL_BEAM, RIDER_MOUNT } from './entities/hullSpec.ts';
 import { Rider } from './entities/Rider.ts';
+import { Hud, type HudCorner, type HudCourse, type HudData } from './ui/Hud.ts';
+import { Screens, type ScreenResultRow, type ScreensData } from './ui/Screens.ts';
+import { AudioEngine } from './audio/AudioEngine.ts';
 import type { BoatCommand, BoatState, RiderPose } from './contracts.ts';
 
 /**
@@ -32,6 +37,7 @@ import type { BoatCommand, BoatState, RiderPose } from './contracts.ts';
 /** One racer: physics, its visual boat, and its rider. */
 interface Racer {
   physics: BoatPhysics;
+  boat: Boat;
   rider: Rider;
   /** Node the rider hangs from; follows the hull transform. */
   mount: Object3D;
@@ -52,12 +58,17 @@ export class Game {
   readonly sky: Sky;
   readonly ocean: Ocean;
   wake: WakeField | null = null;
+  spray: Spray | null = null;
 
   course: Course | null = null;
   racingLine: RacingLine | null = null;
   gates: GateField | null = null;
   buoys: BuoyField | null = null;
   director: RaceDirector | null = null;
+
+  hud: Hud | null = null;
+  screens: Screens | null = null;
+  readonly audio = new AudioEngine();
 
   readonly racers: Racer[] = [];
   /** Scene root for everything race-related, so it can be rebuilt on restart. */
@@ -118,6 +129,14 @@ export class Game {
     // --- world -------------------------------------------------------------
     this.wake = new WakeField(this.engine.renderer, { resolution: 1024, halfExtent: 260 });
 
+    this.spray = new Spray();
+    this.spray.root.layers.set(LAYER_OVERLAY);
+    scene.add(this.spray.root);
+    this.effects.spraySink = (req) => this.spray?.emit(req);
+    // Droplets that land stamp foam into the wake field, so a hard landing
+    // leaves a mark on the water rather than vanishing mid-air.
+    this.spray.setImpactSink((x, z, radius, strength) => this.wake?.splash(x, z, radius, strength));
+
     this.course = new Course();
     this.racingLine = new RacingLine(this.course);
     this.racingLine.mesh.traverse((o) => o.layers.set(LAYER_OVERLAY));
@@ -136,6 +155,28 @@ export class Game {
 
     this.director = new RaceDirector(this.course, this.racers.length);
     this.director.onEvent = this.onRaceEvent;
+
+    // --- UI and audio --------------------------------------------------------
+    this.hud = new Hud(this.hudRoot);
+    this.screens = new Screens(this.hudRoot);
+    this.screens.onStart = () => this.beginRace();
+    this.screens.onResume = () => {
+      this.userPaused = false;
+    };
+    this.screens.onRestart = () => this.restart();
+
+    this.hudCourse = this.buildHudCourse();
+
+    // Browsers block audio until a gesture, so the context is only resumed on
+    // the first real interaction. Everything is a safe no-op before then.
+    const unlock = () => {
+      void this.audio.resume();
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+    };
+    window.addEventListener('pointerdown', unlock);
+    window.addEventListener('keydown', unlock);
+
     this.director.start();
 
     if (url.searchParams.get('probe') === '1') {
@@ -162,20 +203,16 @@ export class Game {
       const physics = new BoatPhysics(i, BOAT_SPECS[i], slot.position.clone(), slot.heading);
       physics.respawn(slot.position.clone(), slot.heading, 0);
 
-      // The rider hangs off a mount node that carries the hull transform. Once
-      // the visual boat exists this node is reparented to Boat.riderMount; until
-      // then it is driven directly, so the rider can be seen and critiqued
-      // without waiting on hull geometry.
-      const mount = new Object3D();
-      mount.position.copy(RIDER_MOUNT);
-      const hull = new Object3D();
-      hull.add(mount);
-      hull.layers.set(LAYER_OPAQUE);
-      this.raceRoot.add(hull);
+      const boat = new Boat(BOAT_SPECS[i]);
+      boat.root.traverse((o) => o.layers.set(LAYER_OPAQUE));
+      this.raceRoot.add(boat.root);
 
+      // The rider hangs off the hull's own cockpit mount, so it inherits the
+      // boat's pitch and roll for free and the hand IK targets stay welded to
+      // the handlebars without any per-frame sync.
       const rider = new Rider(BOAT_SPECS[i].colorIndex);
       rider.root.traverse((o) => o.layers.set(LAYER_OPAQUE));
-      mount.add(rider.root);
+      boat.riderMount.add(rider.root);
 
       // Personalities are assigned in a fixed order so a race is reproducible
       // for the screenshot harness; the PRNG inside each controller is seeded
@@ -184,8 +221,9 @@ export class Game {
 
       this.racers.push({
         physics,
+        boat,
         rider,
-        mount: hull,
+        mount: boat.root,
         pose: Rider.restPose(),
         command: { throttle: 0, brake: 0, steer: 0, drift: false },
         ai,
@@ -194,20 +232,38 @@ export class Game {
     }
   }
 
+  /**
+   * Race events are the one place gameplay, UI and audio meet. Routing them
+   * through a single handler keeps the director ignorant of both.
+   */
   private readonly onRaceEvent = (e: RaceEvent): void => {
     switch (e.type) {
       case 'countdown':
-        if (e.value === 0) this.effects.flash(new Color(0x39ff9c), 0.18);
+        if (e.value === 0) {
+          this.effects.flash(new Color(0x39ff9c), 0.18);
+          this.audio.play('countdownGo');
+          this.audio.play('startHorn', 0.9);
+        } else {
+          this.audio.play('countdownBeep');
+        }
         break;
       case 'gate':
         this.gates?.flashPassed(e.checkpoint);
+        if (e.boatId === 0) this.audio.play('gatePass', 0.5);
         break;
       case 'lap':
-        if (e.boatId === 0) this.effects.flash(new Color(0x8ff4ff), 0.12);
+        if (e.boatId === 0) {
+          this.effects.flash(new Color(0x8ff4ff), 0.12);
+          this.audio.play('lapComplete');
+        }
+        break;
+      case 'wrongWay':
+        if (e.boatId === 0 && e.active) this.audio.play('wrongWay', 0.7);
         break;
       case 'finish':
         if (e.boatId === 0) {
           this.effects.flash(new Color(0xffffff), 0.28);
+          this.audio.play('finish');
           this.rig.mode = 'results';
         }
         break;
@@ -215,6 +271,33 @@ export class Game {
         break;
     }
   };
+
+  /** Leave the title card and run the countdown. */
+  beginRace(): void {
+    void this.audio.resume();
+    this.director?.start();
+  }
+
+  /** Reset every racer to the grid and restart the countdown. */
+  restart(): void {
+    const course = this.course;
+    if (!course) return;
+    const t = this.simTime;
+    for (let i = 0; i < this.racers.length; i++) {
+      const r = this.racers[i];
+      const slot = course.startGrid[i % course.startGrid.length];
+      r.physics.respawn(slot.position.clone(), slot.heading, t);
+      r.ai?.reset();
+      r.celebrate = 0;
+      r.pose = Rider.restPose();
+    }
+    this.director?.reset();
+    this.director?.start();
+    this.rig.mode = 'chase';
+    this.lastPlayerT = 0;
+    this.snapCameraToPlayer();
+    this.audio.play('uiConfirm');
+  }
 
   start(): void {
     if (this.started) return;
@@ -244,9 +327,36 @@ export class Game {
 
   // -------------------------------------------------------------------------
 
-  private update = (dt: number, elapsed: number): void => {
+  /**
+   * Simulation clock, separate from the engine's wall clock.
+   *
+   * Everything that describes the state of the world — the wave field, boat
+   * physics, race timing — reads this instead of `engine.elapsed`, so a pause
+   * genuinely stops the world. Sharing one clock would leave the ocean rolling
+   * under frozen boats, which then sink or fly the moment play resumes.
+   */
+  private simTime = 0;
+
+  private update = (dt: number, wallClock: number): void => {
     if (this.paused) return;
     const control = this.input.update(dt);
+
+    if (control.pausePressed && this.director?.phase === 'racing') {
+      this.userPaused = !this.userPaused;
+      this.audio.play('uiMove');
+      this.audio.setMasterGain(this.userPaused ? 0.15 : 0.85);
+    }
+
+    const uiCtx = { dt, elapsed: wallClock, frame: this.engine.frame };
+    if (this.userPaused) {
+      // The world is frozen, but the UI keeps animating so the pause overlay
+      // can slide in and the screens stay responsive.
+      this.updateUi(uiCtx);
+      return;
+    }
+
+    this.simTime += dt;
+    const elapsed = this.simTime;
     this.effects.tick(elapsed);
 
     const ctx = { dt, elapsed, frame: this.engine.frame };
@@ -301,8 +411,7 @@ export class Game {
       const r = this.racers[i];
       const s = r.physics;
 
-      r.mount.position.copy(s.position);
-      s.getQuaternion(r.mount.quaternion);
+      r.boat.applyState(s, dt);
 
       // Celebration ramps in over a second once a racer is done, so the pose
       // change reads as a reaction rather than a state flip.
@@ -351,6 +460,7 @@ export class Game {
     }
 
     this.ocean.setContacts(this.contacts);
+    this.spray?.update(ctx);
     this.probe?.update(elapsed);
     this.sky.update(cam, elapsed);
     this.ocean.update(cam, elapsed);
@@ -373,10 +483,151 @@ export class Game {
     }
 
     if (control.resetPressed) this.respawnPlayer(elapsed);
+
+    this.updateAudio(dt);
+    this.updateUi(uiCtx);
   };
 
   private lastPlayerT = 0;
+  private userPaused = false;
+  private hudCourse: HudCourse | null = null;
   private readonly curvatureAhead = new Float32Array(24);
+  private readonly hudData: HudData = { phase: 'intro', player: null };
+  private readonly screensData: ScreensData = { phase: 'intro' };
+  private readonly corner: HudCorner = { severity: 0, direction: 0 };
+
+  /**
+   * Sample the spline once at startup for the minimap. The HUD is deliberately
+   * given plain points rather than the curve, so the UI layer never has to know
+   * what a CatmullRomCurve3 is.
+   */
+  private buildHudCourse(): HudCourse | null {
+    const course = this.course;
+    if (!course) return null;
+    const points: Array<{ x: number; z: number }> = [];
+    const N = 180;
+    for (let i = 0; i < N; i++) {
+      const p = course.sample(i / N);
+      points.push({ x: p.position.x, z: p.position.z });
+    }
+    const gates = course.checkpoints.map((c) => ({
+      x: c.position.x,
+      z: c.position.z,
+      // The gate axis is perpendicular to the direction of travel.
+      nx: -c.tangent.z,
+      nz: c.tangent.x,
+    }));
+    return { points, gates, startLine: gates[course.startFinishIndex] };
+  }
+
+  private updateAudio(dt: number): void {
+    const p = this.player;
+    if (!p) return;
+    const s = p.physics;
+    const top = Math.max(s.spec.topSpeed, 1);
+    const speed01 = Math.min(1, s.speed / top);
+    // RPM is not speed. A jet drive spun up against no load still screams, so
+    // revs follow throttle with speed only setting the floor — which is what
+    // makes accelerating out of a corner sound like work rather than a siren.
+    const rpm01 = Math.min(1, speed01 * 0.65 + s.throttleLevel * 0.45);
+    const load01 = Math.min(1, s.throttleLevel * (1 - speed01 * 0.45) + (s.boostTime > 0 ? 0.3 : 0));
+    this.audio.setEngine(rpm01, load01, speed01, s.airborne);
+
+    if (s.landingImpact > 1.5) {
+      this.audio.play(s.landingImpact > 6 ? 'impactHard' : 'impactSoft', Math.min(1, s.landingImpact / 9));
+      this.audio.play('splash', Math.min(1, s.landingImpact / 11));
+    }
+    if (s.collisionImpact > 1.5) {
+      this.audio.play('impactSoft', Math.min(1, s.collisionImpact / 8));
+    }
+    // Boost fires on the rising edge of boostTime.
+    if (s.boostTime > 0 && this.prevBoostTime <= 0) this.audio.play('boostFire');
+    if (s.boostCharge >= 1 && this.prevBoostCharge < 1) this.audio.play('boostCharged', 0.6);
+    this.prevBoostTime = s.boostTime;
+    this.prevBoostCharge = s.boostCharge;
+  }
+
+  private prevBoostTime = 0;
+  private prevBoostCharge = 0;
+
+  private updateUi(ctx: { dt: number; elapsed: number; frame: number }): void {
+    const director = this.director;
+    const p = this.player;
+    if (!this.hud || !this.screens || !director) return;
+
+    const phase = this.userPaused ? director.phase : director.phase;
+    const playerProgress = director.get(0);
+
+    this.states.length = 0;
+    for (const r of this.racers) this.states.push(r.physics);
+
+    const d = this.hudData;
+    d.phase = phase;
+    d.player = p ? p.physics : null;
+    d.boats = this.states;
+    d.progress = director.progress;
+    d.playerProgress = playerProgress;
+    d.totalLaps = director.laps;
+    d.countdown = director.countdownValue;
+    d.wrongWay = playerProgress?.wrongWay ?? false;
+    d.course = this.hudCourse;
+    d.corner = this.cornerAhead();
+    d.paused = this.userPaused;
+    this.hud.update(d, ctx);
+
+    const s = this.screensData;
+    s.phase = phase;
+    s.paused = this.userPaused;
+    s.totalLaps = director.laps;
+    if (phase === 'results' || phase === 'finished') {
+      s.results = this.buildResults();
+      s.playerPosition = playerProgress?.finishPosition || undefined;
+    }
+    this.screens.update(s, ctx);
+  }
+
+  /**
+   * Reduce the sampled curvature ahead to the one number the HUD wants: how
+   * hard the next corner is, and which way it goes.
+   */
+  private cornerAhead(): HudCorner | null {
+    const course = this.course;
+    if (!course) return null;
+    let peak = 0;
+    let peakIdx = 0;
+    for (let i = 2; i < this.curvatureAhead.length; i++) {
+      if (this.curvatureAhead[i] > peak) {
+        peak = this.curvatureAhead[i];
+        peakIdx = i;
+      }
+    }
+    // 0.0035 1/m is the "ease off" threshold, 0.0125 is a genuine hard corner.
+    this.corner.severity = Math.min(1, Math.max(0, (peak - 0.0025) / 0.0110));
+    // Direction from the sign of the turn: compare tangents either side.
+    const line = this.racingLine;
+    if (line) {
+      const t0 = Course.wrap(this.lastPlayerT);
+      const t1 = course.advance(t0, Math.max(20, peakIdx * line.previewSpacing));
+      const a = course.sample(t0).tangent;
+      const b = course.sample(t1).tangent;
+      this.corner.direction = Math.sign(a.x * b.z - a.z * b.x) || 1;
+    }
+    return this.corner.severity > 0.02 ? this.corner : null;
+  }
+
+  private buildResults(): ScreenResultRow[] {
+    const director = this.director;
+    if (!director) return [];
+    return director.standings().map((p) => ({
+      name: BOAT_SPECS[p.boatId].name,
+      colorIndex: BOAT_SPECS[p.boatId].colorIndex,
+      position: p.finishPosition || p.position,
+      totalTime: p.totalTime,
+      bestLap: director.bestLap(p.boatId),
+      isPlayer: p.boatId === 0,
+      finished: p.finished,
+    }));
+  }
 
   /** Sample curvature down the road so the ribbon can colour the corner ahead. */
   private updateCornerPreview(t: number): void {
@@ -482,7 +733,7 @@ export class Game {
     },
 
     seek: (seconds: number, dt = 1 / 60): void => {
-      const steps = Math.max(0, Math.round((seconds - this.engine.elapsed) / dt));
+      const steps = Math.max(0, Math.round((seconds - this.simTime) / dt));
       this.harness.step(Math.min(steps, 60 * 600), dt);
     },
 
@@ -549,16 +800,16 @@ export class Game {
     placeOnCourse: (t: number): void => {
       const p = this.player;
       if (!p || !this.course) return;
-      const point = this.course.sample(Course.wrap(t), this.engine.elapsed);
+      const point = this.course.sample(Course.wrap(t), this.simTime);
       const heading = Math.atan2(point.tangent.x, point.tangent.z);
-      p.physics.respawn(point.position.clone(), heading, this.engine.elapsed);
+      p.physics.respawn(point.position.clone(), heading, this.simTime);
       this.lastPlayerT = t;
     },
 
     stats: () => ({
       fps: this.engine.fps,
       frame: this.engine.frame,
-      elapsed: this.engine.elapsed,
+      elapsed: this.simTime,
       pixelRatio: this.engine.pixelRatio,
       tier: this.engine.adaptive.tier,
       drawCalls: this.engine.pipeline.stats.calls,

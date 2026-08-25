@@ -1,6 +1,7 @@
 import { BufferAttribute, BufferGeometry, MathUtils, Vector3 } from 'three';
 import {
   ENGINE_POINT,
+  HANDLEBAR_HALF_SPAN,
   HANDLEBAR_POINT,
   HULL_BEAM,
   HULL_CENTRE_BEAM,
@@ -675,16 +676,39 @@ function gunwaleTop(st: HullStation): { x: number; y: number } {
   return { x: st.sheerHalf - 0.05, y: st.sheerY + 0.055 };
 }
 
-/** The coaming rim this station's deck runs inboard to. */
+/** How far the after deck dishes down into the engine bay. */
+const AFTER_DECK_DROP = 0.3;
+
+/**
+ * How deeply the after deck dishes into an engine bay, 0..1.
+ *
+ * This exists because ENGINE_POINT is at y = 0.46 and the deck crown is at
+ * about 0.66: an engine centred on the point the spec gives would be four
+ * fifths buried and read as a bump. Dropping the after deck 30 cm along the
+ * centreline puts 40 cm of turbine above the deck line, which is what the
+ * chase camera spends the whole race looking at. It also earns its keep in
+ * silhouette — the deck valley notches the top of the transom, so the stern
+ * reads as a shape rather than as a flat slab.
+ *
+ * Starts aft of z = -1.35, which is behind the cockpit's aft ramp, so the two
+ * deck features never overlap.
+ */
+function engineBayDish(z: number): number {
+  return smooth01((-1.35 - z) / 0.5);
+}
+
+/** The coaming rim, or the bay floor, this station's deck runs inboard to. */
 function cockpitRim(st: HullStation): { half: number; y: number } {
   const lip = cockpitOpening(st.z);
   const g = gunwaleTop(st);
   return {
     half: COCKPIT_HALF * lip,
-    // Outside the cockpit the "rim" is a low spine ridge down the fore and
-    // after decks; inside it climbs to HULL_FREEBOARD, which is where that
-    // number is defined to be measured.
-    y: MathUtils.lerp(g.y + 0.045, COAMING_Y, lip),
+    // Outside the cockpit the "rim" is a low spine ridge down the fore deck;
+    // inside it climbs to HULL_FREEBOARD, which is where that number is
+    // defined to be measured; aft it dishes into the engine bay.
+    y:
+      MathUtils.lerp(g.y + 0.045, COAMING_Y, lip) -
+      AFTER_DECK_DROP * engineBayDish(st.z),
   };
 }
 
@@ -695,12 +719,19 @@ const DECK_U = [0, 0.45, 0.8, 0.91, 1];
 function deckHalfProfile(st: HullStation): { x: number; y: number; t: Tint }[] {
   const g = gunwaleTop(st);
   const rim = cockpitRim(st);
+  const dish = AFTER_DECK_DROP * engineBayDish(st.z);
+  // The coaming rise before the bay is subtracted back out.
+  const lipTop = rim.y + dish;
   return DECK_U.map((u) => ({
     x: MathUtils.lerp(g.x, rim.half, u),
-    // The rise is squeezed into the last 20% of the width so the coaming is a
-    // lip you could grip, not a domed deck.
-    y: MathUtils.lerp(g.y, rim.y, smooth01((u - 0.8) / 0.2)),
-    t: u >= 0.91 ? PANEL : PAINT,
+    // Two separate shapes across the width, because they want opposite
+    // profiles: the coaming rise is squeezed into the last 20% so it is a lip
+    // you could grip rather than a domed deck, while the bay has to fall away
+    // over most of the half-beam or its walls come out near-vertical.
+    y:
+      MathUtils.lerp(g.y, lipTop, smooth01((u - 0.8) / 0.2)) -
+      dish * smooth01((u - 0.15) / 0.65),
+    t: u >= 0.8 ? mixTint(u >= 0.91 ? PANEL : PAINT, CAVITY, engineBayDish(st.z)) : PAINT,
   }));
 }
 
@@ -1086,17 +1117,23 @@ export function buildIntakeGlowGeometry(): BufferGeometry {
  * Swept back hard, which is doing a specific job: from the chase camera the
  * boat is nearly all deck and the fin is the only vertical the eye can read
  * yaw against, so a fin that leans is worth several degrees of apparent turn.
- * Base is buried in the engine barrel.
+ *
+ * Its bottom edge is a two-segment polyline rather than a straight line so it
+ * tracks the after deck as that dishes into the engine bay: forward it is
+ * buried inside the turbine barrel, aft it sits under the bay floor. A straight
+ * base leaves the fin floating 8 cm clear of the deck behind the barrel, which
+ * is exactly the kind of gap the ink pass draws a bright line through.
  */
 export function buildFinGeometry(): BufferGeometry {
   const b = new SurfaceBuilder();
   extrudePlate(
     b,
     [
-      [-1.62, 0.7],
-      [-2.58, 0.7],
-      [-2.66, 1.06],
-      [-2.02, 1.1],
+      [-1.55, 0.72],
+      [-2.3, 0.36],
+      [-2.66, 0.34],
+      [-2.66, 0.95],
+      [-2.05, 1.15],
     ],
     0.035,
     PAINT,
@@ -1133,48 +1170,64 @@ export function buildRudderGeometry(): BufferGeometry {
 }
 
 /**
- * The handlebars, at HANDLEBAR_POINT.
+ * The steering console and handlebars.
  *
- * A stem out of the cowl, a swept crossbar, and two fat grips. The sweep is
- * quadratic in |x| so the bar ends come back and up towards the rider — the
- * rider's hand IK solves to a point on this bar, and bars that run dead
- * straight across put the wrists in a position no person would hold.
+ * The bar axis runs dead straight through HANDLEBAR_POINT for the whole width
+ * of the grips, and that is not a styling choice. `RiderRig` solves the hands
+ * to (+-HANDLEBAR_HALF_SPAN, ...) by exact analytic IK, so any sweep or rise
+ * applied across the grip zone moves the bar off the point the hands are going
+ * to be, and the rider ends up holding a couple of centimetres of air. The
+ * sweep is therefore pushed outboard of the grips, where it costs nothing and
+ * still gives the bar ends somewhere to go.
+ *
+ * The console rises out of the cockpit floor rather than off the deck, because
+ * HANDLEBAR_POINT sits inside the well opening — which is right, that is where
+ * a steering column belongs relative to someone standing in the footwell.
  */
 export function buildHandlebarGeometry(): BufferGeometry {
   const b = new SurfaceBuilder();
-  const hx = HANDLEBAR_POINT.x;
   const hy = HANDLEBAR_POINT.y;
   const hz = HANDLEBAR_POINT.z;
 
-  const stem = [
-    tubeRing(hx, 0.64, hz - 0.06, 'y', 0.075, 6, PANEL, Math.PI / 6),
-    tubeRing(hx, 0.85, hz - 0.02, 'y', 0.062, 6, PANEL, Math.PI / 6),
-    tubeRing(hx, hy, hz, 'y', 0.05, 6, PANEL, Math.PI / 6),
-  ];
-  loftRings(b, stem);
-  fanCap(b, stem[0], _dir.set(0, -1, 0), PANEL);
-  fanCap(b, stem[stem.length - 1], _dir.set(0, 1, 0), PANEL);
+  // Leans back towards the rider going up: base ahead of the top.
+  const column = [
+    [COCKPIT_FLOOR_Y - 0.03, 0.045, 0.155],
+    [0.66, 0.03, 0.125],
+    [1.0, 0.012, 0.085],
+    [hy, 0, 0.05],
+  ].map(([y, dz, r]) => tubeRing(0, y, hz + dz, 'y', r, 6, PANEL, Math.PI / 6));
+  loftRings(b, column);
+  fanCap(b, column[0], _dir.set(0, -1, 0), PANEL);
+  fanCap(b, column[column.length - 1], _dir.set(0, 1, 0), PANEL);
 
-  const barHalf = 0.32;
+  const straight = HANDLEBAR_HALF_SPAN + 0.088;
   const barRing = (x: number, r: number, t: Tint): SurfacePoint[] => {
-    const k = Math.abs(x) / barHalf;
-    return tubeRing(hx + x, hy + 0.022 * k * k, hz - 0.055 * k * k, 'x', r, 6, t, Math.PI / 6);
+    // Beyond the straight section the ends rake back and up.
+    const over = Math.max(0, Math.abs(x) - straight);
+    return tubeRing(x, hy + over * 0.7, hz - over * 1.1, 'x', r, 6, t, Math.PI / 6);
   };
 
-  const bar = [-barHalf, -0.22, -0.1, 0, 0.1, 0.22, barHalf].map((x) =>
-    barRing(x, 0.036, PANEL),
-  );
+  const bar = [
+    -straight - 0.045,
+    -straight,
+    -HANDLEBAR_HALF_SPAN,
+    -0.1,
+    0,
+    0.1,
+    HANDLEBAR_HALF_SPAN,
+    straight,
+    straight + 0.045,
+  ].map((x) => barRing(x, 0.036, PANEL));
   loftRings(b, bar);
   fanCap(b, bar[0], _dir.set(-1, 0, 0), PANEL);
   fanCap(b, bar[bar.length - 1], _dir.set(1, 0, 0), PANEL);
 
-  // Grips straddle x = +-0.212, which is where RiderRig's GRIP puts the wrists.
+  // Grips centred on the IK target, fat enough that a closed fist modelled
+  // around a bar looks like it is gripping something.
   for (const side of [-1, 1]) {
-    const grip = [
-      barRing(side * 0.15, 0.05, CAVITY),
-      barRing(side * 0.21, 0.056, CAVITY),
-      barRing(side * 0.29, 0.052, CAVITY),
-    ];
+    const grip = [-0.062, 0, 0.062, 0.076].map((d, i) =>
+      barRing(side * (HANDLEBAR_HALF_SPAN + d), [0.05, 0.056, 0.054, 0.044][i], CAVITY),
+    );
     loftRings(b, grip);
     fanCap(b, grip[0], _dir.set(-side, 0, 0), CAVITY);
     fanCap(b, grip[grip.length - 1], _dir.set(side, 0, 0), CAVITY);

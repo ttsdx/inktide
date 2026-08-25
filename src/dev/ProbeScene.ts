@@ -1,6 +1,8 @@
 import {
   BoxGeometry,
+  BufferGeometry,
   ConeGeometry,
+  Float32BufferAttribute,
   Group,
   IcosahedronGeometry,
   Mesh,
@@ -83,23 +85,19 @@ export class ProbeScene {
 
     // CREASE STACK — the case the inverted hull physically cannot draw.
     //
-    // Three plates stepped back and up, sharing one silhouette from the front.
-    // A hull shell only inks the outer boundary of that silhouette, so the two
-    // internal steps are visible only if the screen-space edge pass finds them.
-    // Every other primitive here is convex, which is why the interior-line
-    // pass looked "nearly working" for so long: there was nothing for it to do.
-    const stack = new Group();
-    for (let i = 0; i < 3; i++) {
-      const plate = new Mesh(
-        new BoxGeometry(3.4 - i * 0.55, 0.55, 2.2),
-        new CelMaterial({ color: PALETTE.suitLit.clone() }),
-      );
-      plate.position.set(0, i * 0.62, -i * 0.5);
-      stack.add(plate);
-    }
-    stack.position.set(14.5, 2.0, 0);
-    this.root.add(stack);
-    this.bobbers.push({ mesh: stack as unknown as Mesh, phase: 4.1, base: stack.position.clone() });
+    // Three plates stepped back and up, MERGED INTO ONE GEOMETRY so a single
+    // shell wraps the whole thing. The shell then only inks the outer boundary
+    // and the two internal steps exist in the frame if and only if the
+    // screen-space edge pass finds them. Built as three separate meshes this
+    // proved nothing, because each got its own shell and the hull drew all the
+    // steps by itself — which is how the interior-line pass managed to look
+    // "nearly working" for several rounds while doing almost nothing. Every
+    // other primitive here is convex.
+    add(ProbeScene.mergeBoxes([
+      { size: [3.4, 0.6, 2.2], at: [0, 0, 0] },
+      { size: [2.7, 0.6, 1.9], at: [0, 0.6, -0.45] },
+      { size: [2.0, 0.6, 1.6], at: [0, 1.2, -0.9] },
+    ]), PALETTE.suitLit, [14.5, 2.2, 0]);
 
     // Distance calibration row: identical spheres receding straight down -Z on
     // a clear lane, so a single frame can be measured end to end. They were
@@ -114,6 +112,33 @@ export class ProbeScene {
 
     outlineHierarchy(this.root, { widthPx: 2.6 });
     this.root.traverse((o) => o.layers.set(LAYER_OPAQUE));
+  }
+
+  /**
+   * Concatenate box geometries into one non-indexed BufferGeometry.
+   *
+   * three has no merge helper in core, and the crease test specifically needs
+   * ONE geometry so it gets ONE outline shell.
+   */
+  private static mergeBoxes(
+    parts: Array<{ size: [number, number, number]; at: [number, number, number] }>,
+  ): BufferGeometry {
+    const pos: number[] = [];
+    const nrm: number[] = [];
+    for (const p of parts) {
+      const box = new BoxGeometry(...p.size).toNonIndexed();
+      const bp = box.getAttribute('position');
+      const bn = box.getAttribute('normal');
+      for (let i = 0; i < bp.count; i++) {
+        pos.push(bp.getX(i) + p.at[0], bp.getY(i) + p.at[1], bp.getZ(i) + p.at[2]);
+        nrm.push(bn.getX(i), bn.getY(i), bn.getZ(i));
+      }
+      box.dispose();
+    }
+    const geo = new BufferGeometry();
+    geo.setAttribute('position', new Float32BufferAttribute(pos, 3));
+    geo.setAttribute('normal', new Float32BufferAttribute(nrm, 3));
+    return geo;
   }
 
   update(elapsed: number): void {

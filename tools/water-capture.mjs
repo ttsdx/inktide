@@ -100,6 +100,9 @@ function parseArgs(argv) {
     else if (a === '--height') out.height = Number(next());
     else if (a === '--quality') out.quality = next();
     else if (a === '--only') out.only = next().split(',').map((s) => s.trim());
+    // Isolates the ocean's own foam from the wake field and the spray, which is
+    // the only way to tell which system is responsible for a given white pixel.
+    else if (a === '--no-wake') out.noWake = true;
   }
   return out;
 }
@@ -110,8 +113,9 @@ const args = parseArgs(process.argv);
  * Runs in the page. Imports the two systems under test, builds a scripted boat
  * and installs an update hook on the engine. Returns once everything is live.
  */
-async function installWaterRig() {
+async function installWaterRig(opts) {
   const game = window.__INKTIDE__;
+  const noWake = Boolean(opts && opts.noWake);
   const [{ WakeField }, { Spray }] = await Promise.all([
     import('/src/world/WakeField.ts'),
     import('/src/world/Spray.ts'),
@@ -184,7 +188,8 @@ async function installWaterRig() {
     wake.update(ctx);
     spray.update(ctx);
 
-    game.ocean.setWakeField(wake.texture, wake.centerX, wake.centerZ, wake.extent);
+    if (noWake) game.ocean.setWakeField(null, 0, 0, wake.extent);
+    else game.ocean.setWakeField(wake.texture, wake.centerX, wake.centerZ, wake.extent);
 
     // Hull contact ring so the ocean's analytic foam term is exercised too.
     game.ocean.setContacts([
@@ -311,7 +316,7 @@ async function main() {
       document.getElementById('boot')?.remove();
       window.__INKTIDE__.harness.pause();
     });
-    await page.evaluate(installWaterRig);
+    await page.evaluate(installWaterRig, { noWake: Boolean(args.noWake) });
     lastTime = 0;
     booted = true;
   };

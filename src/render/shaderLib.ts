@@ -1,5 +1,5 @@
 import { PALETTE, SUN_DIR } from '../core/Palette.ts';
-import { CEL_RAMP_SCALE } from './materials/proceduralTextures.ts';
+import { CEL_MATCAP_NEUTRAL, CEL_RAMP_SCALE } from './materials/proceduralTextures.ts';
 
 /**
  * Shared GLSL building blocks.
@@ -50,9 +50,19 @@ void writeNormalDepth(vec3 viewNormal, float viewDepth) {
  *
  * The depth is still written, because the ocean's waterline foam samples this
  * attachment and needs geometry to occlude it.
+ *
+ * The flag is the ENCODED zero (0.5), not a raw zero. The main target is
+ * multisampled, so the resolve averages this attachment across every edge in
+ * the frame — and averaging a raw zero with a neighbouring surface normal
+ * yields a full-length normal pointing somewhere the geometry never faced. That
+ * put a fabricated normal discontinuity around every antialiased silhouette and
+ * defeated the entire flagging scheme; the line mask showed a complete second
+ * outline on every curved object even with the flag in place. Averaging the
+ * encoded zero only *shortens* the surface's normal, leaving its direction
+ * intact, which the Sobel pass can recognise and discount.
  */
 void writeInkNormalDepth(float viewDepth) {
-  outNormalDepth = vec4(0.0, 0.0, 0.0, clamp(viewDepth / uCameraFar, 0.0, 1.0));
+  outNormalDepth = vec4(0.5, 0.5, 0.5, clamp(viewDepth / uCameraFar, 0.0, 1.0));
 }
 `;
 
@@ -217,8 +227,9 @@ vec3 celShade(CelInput s) {
   // brightest region — the painted highlight wedge. This is the part that reads
   // as an actual reflection rather than as extra ambient, and it is tinted
   // towards the paint so it cannot wash a coloured hull towards white.
-  float sheen = env * env * env;
-  diffuse += sheen * uMatcapStrength * 0.32 * mix(vec3(1.0), s.baseColor + 0.4, 0.65);
+  float sheen = max(envSigned, 0.0);
+  sheen *= sheen;
+  diffuse += sheen * uMatcapStrength * 1.6 * mix(vec3(1.0), s.baseColor + 0.4, 0.65);
 
   // --- 4. fresnel rim ----------------------------------------------------
   // Two rims, because one term cannot do both jobs.
