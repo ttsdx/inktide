@@ -556,17 +556,53 @@ export function buildForearm(): BufferGeometry {
  * character is wearing gloves in the first place.
  */
 export function buildGlove(): BufferGeometry {
+  // A CLOSED FIST, not a tapered stub.
+  //
+  // The previous shape narrowed smoothly from the cuff to a point, following
+  // the forearm's axis, which is the silhouette of an arm ending rather than of
+  // a hand gripping something. Reviewers reading the frames concluded the
+  // riders had no hands at all — and at the size the character reaches in a
+  // cockpit shot, roughly 900 px tall, that is a fair reading of what was
+  // there.
+  //
+  // What makes a fist read is not detail, it is two hard breaks: the knuckle
+  // line where the hand stops being a wrist, and the finger break where the
+  // curled fingers meet the palm. Both are `hard` rings here, and the widest
+  // point is now the knuckles rather than the cuff, so the shape swells before
+  // it closes instead of tapering all the way down.
   return loftSections(
     [
-      { y: 0.01, w: 0.046, d: 0.048, round: 2.8 },
+      { y: 0.012, w: 0.042, d: 0.046, round: 3.0 },
       // Gauntlet cuff: hard, because a crisp ring here separates glove from
       // forearm at any distance and hides the joint between the two meshes.
-      { y: -0.02, w: 0.056, d: 0.062, z: 0.008, round: 3.2, hard: true },
-      { y: -0.062, w: 0.058, d: 0.07, z: 0.024, round: 3.2 },
-      { y: -0.098, w: 0.05, d: 0.06, z: 0.042, round: 3.0 },
-      { y: -RIDER_DIMS.hand, w: 0.036, d: 0.042, z: 0.052, round: 2.6 },
+      { y: -0.014, w: 0.054, d: 0.062, z: 0.006, round: 3.2, hard: true },
+      // Knuckles, and the widest section on the hand.
+      { y: -0.042, w: 0.066, d: 0.078, z: 0.020, round: 3.4, hard: true },
+      // Finger break: the curl starts here and the section steps in.
+      { y: -0.074, w: 0.060, d: 0.074, z: 0.032, round: 3.2, hard: true },
+      { y: -RIDER_DIMS.hand, w: 0.046, d: 0.058, z: 0.040, round: 2.8 },
     ],
     6,
+  );
+}
+
+/**
+ * The thumb, as its own mesh laid over the top of the fist.
+ *
+ * A fist without one reads as a mitten, and a mitten reads as a placeholder.
+ * It is four sections and about sixty triangles, which buys the single feature
+ * that says a hand is wrapped around something rather than resting on it.
+ */
+export function buildThumb(side: number): BufferGeometry {
+  const s = Math.sign(side) || 1;
+  return loftSections(
+    [
+      { y: -0.016, w: 0.020, d: 0.024, x: -s * 0.040, z: 0.020, round: 2.6 },
+      { y: -0.034, w: 0.023, d: 0.027, x: -s * 0.050, z: 0.034, round: 2.8, hard: true },
+      { y: -0.056, w: 0.021, d: 0.025, x: -s * 0.052, z: 0.046, round: 2.6 },
+      { y: -0.070, w: 0.014, d: 0.018, x: -s * 0.048, z: 0.052, round: 2.2 },
+    ],
+    5,
   );
 }
 

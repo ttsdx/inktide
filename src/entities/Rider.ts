@@ -20,6 +20,7 @@ import {
   buildBoot,
   buildForearm,
   buildGlove,
+  buildThumb,
   buildHelmet,
   buildHelmetFin,
   buildHelmetStripe,
@@ -370,6 +371,9 @@ export class Rider {
       this.part(buildUpperArm(), suit, r.sided('upperArm', side), `upperArm${tag}`);
       this.part(buildForearm(), suit, r.sided('forearm', side), `forearm${tag}`);
       this.part(buildGlove(), gear, r.sided('hand', side), `glove${tag}`);
+      // Its own mesh so it reads against the fist's silhouette rather than
+      // being lofted into it and disappearing.
+      this.part(buildThumb(side), gear, r.sided('hand', side), `thumb${tag}`);
       this.part(buildThigh(), suit, r.sided('thigh', side), `thigh${tag}`);
       this.part(buildShin(), suit, r.sided('shin', side), `shin${tag}`);
       this.part(buildBoot(), gear, r.sided('foot', side), `boot${tag}`);
