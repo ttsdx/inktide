@@ -1013,6 +1013,36 @@ const SPONSON_TOP = [0.28, 0.3, 0.3, 0.305, 0.31, 0.32, 0.33, 0.34];
  * The outboard wall is tinted with the stripe tone so it answers the hull's
  * racing stripe instead of introducing a third value.
  */
+/**
+ * The sponson's outboard wall at a longitudinal position.
+ *
+ * Exported for the race number, which lives on this wall: it is by a wide
+ * margin the largest flat panel on the boat and the one a chase camera coming
+ * up behind a rival actually sees. The number was first put on the hull's own
+ * topside, which is the obvious place on a boat that does not have outriggers —
+ * on this one the sponson covers almost all of it and the numeral was buried.
+ *
+ * Returns the outboard x for the given side and the wall's vertical extent, so
+ * a decal can be fitted to the panel rather than guessed onto it.
+ */
+export function sponsonWallAt(z: number, side: -1 | 1): { x: number; yBottom: number; yTop: number } {
+  // Find the span containing z. The table runs bow to stern, so it is
+  // descending in z.
+  let i = 0;
+  while (i < SPONSON_Z.length - 2 && z < SPONSON_Z[i + 1]) i++;
+  const z0 = SPONSON_Z[i];
+  const z1 = SPONSON_Z[i + 1];
+  const f = MathUtils.clamp((z - z0) / (z1 - z0 || 1), 0, 1);
+
+  return {
+    x: MathUtils.lerp(SPONSON_OUT[i], SPONSON_OUT[i + 1], f) * side,
+    // The wall proper starts above the bottom chamfer and ends below the top
+    // one; the ring above builds those two at +0.13 and -0.05.
+    yBottom: MathUtils.lerp(SPONSON_BOT[i], SPONSON_BOT[i + 1], f) + 0.13,
+    yTop: MathUtils.lerp(SPONSON_TOP[i], SPONSON_TOP[i + 1], f),
+  };
+}
+
 export function buildSponsonGeometry(side: -1 | 1): BufferGeometry {
   const b = new SurfaceBuilder();
 

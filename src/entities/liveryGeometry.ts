@@ -1,5 +1,5 @@
 import { BufferAttribute, BufferGeometry, Color, MathUtils } from 'three';
-import { sampleHullStation } from './boatGeometry.ts';
+import { sponsonWallAt } from './boatGeometry.ts';
 
 /**
  * RACE NUMBERS
@@ -25,15 +25,19 @@ import { sampleHullStation } from './boatGeometry.ts';
  *   It suits the art direction. The rest of the frame is hard-edged flat shapes
  *   with ink round them; a seven-segment numeral is already that.
  *
- * HOW IT SITS ON THE HULL
+ * WHERE IT GOES, AND WHY NOT ON THE HULL
  *
- * Not as a flat plate. The topside is curved in both directions, so a plate
- * either floats off the middle of the number or buries its corners. Each vertex
- * instead has its outboard position looked up from the real hull section at its
- * own z and y — `sampleHullStation` is the same function the hull loft itself
- * is built from — and is then pushed out along the local surface normal. The
- * number is therefore painted on the boat rather than bolted to it, and it
- * stays that way if the hull's control points are ever edited.
+ * On the outboard wall of the sponson, not on the hull's own topside. The
+ * topside is where a number belongs on a boat without outriggers, and that is
+ * where this went first — but these hulls are hydroplanes and the sponson
+ * covers nearly all of that panel, so the numeral came back almost entirely
+ * buried behind it with a couple of pale slivers showing. The sponson wall is
+ * by a wide margin the largest flat area on the boat and it is what a chase
+ * camera coming up behind a rival actually sees.
+ *
+ * Each vertex still takes its position from the real sponson section at its own
+ * z, through `sponsonWallAt`, rather than from a flat plate: the wall tapers
+ * fore and aft, so a plate would float off it at the ends.
  */
 
 /** Stroke width as a fraction of the numeral's box. */
@@ -72,32 +76,13 @@ const DIGITS: Record<number, readonly string[]> = {
 };
 
 /**
- * A racing numeral's box on the hull flank, in hull space.
+ * The numeral's box on the sponson wall, in hull space.
  *
- * Sited on the topside between the chine and the sheer, forward of the cockpit
- * where the panel is broadest and where a chase camera looking past a rival
- * actually sees it.
+ * `z0`/`z1` bracket the part of the wall that is close to parallel-sided, and
+ * the two `v` values inset the numeral from the wall's top and bottom chamfers
+ * so its ink never collides with the panel's own edges.
  */
-const FLANK = { z0: -0.45, z1: 1.05, v0: 0.06, v1: 0.86 };
-
-/**
- * Where a point sits on the topside at a given station.
- *
- * The topside is the run from the chine to the sheer, so a normalised height
- * `t` interpolates between the two. Returns the outboard half-width and the
- * world Y, plus the section's local slope so the relief can be pushed along
- * something close to the surface normal instead of straight out sideways.
- */
-function topsideAt(z: number, t: number): { half: number; y: number; slope: number } {
-  const st = sampleHullStation(z);
-  const half = MathUtils.lerp(st.chineHalf, st.sheerHalf, t);
-  const y = MathUtils.lerp(st.chineY, st.sheerY, t);
-  // d(half)/d(y) across the topside: positive where the section flares out as
-  // it rises. The surface normal in the section plane is perpendicular to that.
-  const dy = st.sheerY - st.chineY;
-  const dh = st.sheerHalf - st.chineHalf;
-  return { half, y, slope: Math.abs(dy) > 1e-4 ? dh / dy : 0 };
-}
+const PANEL = { z0: -1.05, z1: 0.35, v0: 0.2, v1: 0.86 };
 
 interface Builder {
   pos: number[];
@@ -111,7 +96,7 @@ interface Builder {
  * Both faces are emitted, plus the four sides, because the ink shell inverts a
  * closed volume — an open plate turns inside out and the outline explodes.
  */
-function segment(b: Builder, rect: Rect, side: number, mirror: boolean, colour: Color): void {
+function segment(b: Builder, rect: Rect, side: -1 | 1, mirror: boolean, colour: Color): void {
   const [u0, v0, u1, v1] = rect;
   const corners: Array<[number, number]> = [
     [u0, v0],
@@ -125,20 +110,16 @@ function segment(b: Builder, rect: Rect, side: number, mirror: boolean, colour: 
   for (const [u, v] of corners) {
     // The port side reads the other way round, so its u axis is flipped.
     const uz = mirror ? 1 - u : u;
-    const z = MathUtils.lerp(FLANK.z0, FLANK.z1, uz);
-    const t = MathUtils.lerp(FLANK.v0, FLANK.v1, v);
-    const { half, y, slope } = topsideAt(z, t);
+    const z = MathUtils.lerp(PANEL.z0, PANEL.z1, uz);
+    const wall = sponsonWallAt(z, side);
+    const t = MathUtils.lerp(PANEL.v0, PANEL.v1, v);
+    const y = MathUtils.lerp(wall.yBottom, wall.yTop, t);
 
-    // Outward normal in the section plane: (1, -slope) normalised, pointing
-    // away from the centreline.
-    const nl = Math.hypot(1, slope) || 1;
-    const nx = (1 / nl) * side;
-    const ny = -slope / nl;
-
-    // Inner face sits a hair proud of the hull so it never z-fights with it;
-    // the outer face carries the relief.
-    for (const push of [0.001, RELIEF]) {
-      b.pos.push(half * side + nx * push, y + ny * push, z);
+    // The wall is close to vertical, so the relief is straight outboard. Inner
+    // face a hair proud of the panel so it never z-fights with it; the outer
+    // face carries the rest.
+    for (const push of [0.002, RELIEF]) {
+      b.pos.push(wall.x + push * side, y, z);
       b.col.push(colour.r, colour.g, colour.b);
     }
   }
