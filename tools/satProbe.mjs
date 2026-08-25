@@ -23,6 +23,35 @@
  *
  *   node tools/satProbe.mjs            runs every variant
  *   node tools/satProbe.mjs spray      runs one
+ *
+ * WHAT TWO TURNS OF THIS ESTABLISHED, so the next attempt starts from the data
+ * instead of repeating it. All measured at 1600x900 scale 2, one browser per
+ * sample, mean saturation of the lower 40% of frame:
+ *
+ *   The gap is real. Water-only captures 0.79-0.96, gameplay captures
+ *   0.27-0.42.
+ *
+ *   Nothing is drawn on top. Spray, the ribbon and its halo, bloom, the
+ *   interior lines, the gates and buoys, the foam, the haze, the glitter and
+ *   the pre-filter each recover under 0.015, and several are negative.
+ *
+ *   It is not the camera's geometry. At one instant a 5.2 m level camera and a
+ *   22 m looking-down camera both measure 0.58 where the chase camera measures
+ *   0.31.
+ *
+ *   It is not distance. Binned into ten screen bands the drop is uniform:
+ *   0.81 to 0.47 at the top of the water, 0.77 to 0.37 at the bottom.
+ *
+ *   It appears the moment the throttle opens. Idle at t=12 measures 0.76; at
+ *   t=20 under power, 0.40.
+ *
+ *   Two contributors are confirmed and neither is dominant. The wake field is
+ *   worth 0.06 (0.334 with it, 0.395 without — and note the earlier test of
+ *   this was invalid, because Game rebinds the wake texture every frame and
+ *   undid the switch before the next render). The speed FOV kick is worth 0.04
+ *   (65.1 degrees against 56 at the same pose).
+ *
+ *   That leaves roughly 0.3 unaccounted for.
  */
 import { chromium } from '@playwright/test';
 

@@ -78,6 +78,8 @@ export class Game {
 
   private started = false;
   private paused = false;
+  /** Diagnostic latch; see `harness.setLayerVisible`. */
+  private wakeEnabled = true;
   private probe: ProbeScene | null = null;
   private waterline: WaterlineRig | null = null;
 
@@ -515,7 +517,12 @@ export class Game {
       this.wake.follow(focus.x, focus.z);
       this.wake.submit(this.emitters);
       this.wake.update(ctx);
-      this.ocean.setWakeField(this.wake.texture, this.wake.centerX, this.wake.centerZ, this.wake.extent);
+      this.ocean.setWakeField(
+        this.wakeEnabled ? this.wake.texture : null,
+        this.wake.centerX,
+        this.wake.centerZ,
+        this.wake.extent,
+      );
     }
 
     this.ocean.setContacts(this.contacts);
@@ -1020,7 +1027,10 @@ export class Game {
       };
       const t = targets[layer];
       if (t) t.visible = on;
-      if (layer === 'wake') this.ocean.setWakeField(null, 0, 0, 260);
+      // The wake needs a latched flag, not a one-shot call: `update` re-binds
+      // the wake texture every frame, so clearing it here was undone before the
+      // next render and the resulting measurement said the wake did not matter.
+      if (layer === 'wake') this.wakeEnabled = on;
     },
 
     setOceanUniform: (name: string, value: number): void => {
