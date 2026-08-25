@@ -1380,7 +1380,15 @@ void main() {
   // the frame no matter how the lobe was shaped.
   vec2 sunAz = normalize(vec2(SUN_DIR.x, SUN_DIR.z));
   vec2 toPix = normalize(p - cameraPosition.xz + vec2(1e-5, 0.0));
+  // Stepped, like every other falloff in this shader.
+  //
+  // The shapes drawn inside the sun path are quantised, but their STRENGTH was
+  // a smooth azimuthal ramp, so the path itself was a soft gradient laid across
+  // a frame in which nothing else is allowed to be one. It is wide — the whole
+  // sunward half of the near field — which is why it survived quantising the
+  // foam and the pre-filter and still left the wake reading as an airbrush.
   float road = smoothstep(0.72, 0.96, dot(toPix, sunAz));
+  road = floor(road * 3.0 + 0.35) / 3.0;
 
   float pathFade = detail * (1.0 - foamEdge) * dash * road;
   col = mix(col, uCrest, pathA * 0.42 * pathFade);
