@@ -524,7 +524,17 @@ void main() {
     float falloff = 1.0 - clamp((across - 0.66) / 0.34, 0.0, 1.0);
     falloff = floor(falloff * 3.0 + 0.001) / 3.0;
     float pulse = 0.72 + 0.28 * step(0.5, fract(vAlong / 46.0 - uTime * 0.24));
-    vec3 col = base * falloff * 0.20 * pulse * mix(0.45, 1.0, vDetail);
+
+    // The halo returns early, so it has to apply the ribbon's two fades itself.
+    // It did not, and that is why an edge-on stretch still filled a quarter of
+    // the frame with flat mint after the main pass had been taught to fade
+    // there: the mass in that corner was never the ribbon, it was the ribbon's
+    // glow, drawn additively at alpha 1 and answering to neither fade.
+    float haloFade = 1.0 - smoothstep(uFogNear, uFogFar, vViewDepth);
+    float haloResolved =
+      1.0 - smoothstep(uChevronPeriod * 0.6, uChevronPeriod * 2.2, fwidth(vAlong));
+    vec3 col = base * falloff * 0.20 * pulse * mix(0.45, 1.0, vDetail)
+      * mix(0.10, 1.0, haloFade) * mix(0.08, 1.0, haloResolved);
     outColor = vec4(col, 1.0);
     outNormalDepth = vec4(0.0, 0.0, 0.0, 1.0);
     return;
