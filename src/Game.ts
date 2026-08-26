@@ -235,6 +235,7 @@ export class Game {
     this.ocean.setQuality(tier);
     this.wake?.setQuality(tier);
     this.spray?.setQuality(tier);
+    this.racingLine?.setQuality(tier);
     this.riderLodDist = tier === 'low' ? 28 : tier === 'medium' ? 52 : tier === 'high' ? 80 : 120;
     if (this.racingLine) this.racingLine.glow.visible = tier !== 'low';
   }

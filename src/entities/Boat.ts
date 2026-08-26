@@ -1,5 +1,6 @@
 import { Color, Group, MathUtils, Matrix4, Mesh, Object3D, Vector3 } from 'three';
 import type { BufferGeometry, Material } from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { BoatSpec, BoatState } from '../contracts.ts';
 import { PALETTE } from '../core/Palette.ts';
 import { LAYER_OPAQUE } from '../render/layers.ts';
@@ -129,11 +130,18 @@ export class Boat {
       name: 'BoatTrim',
     });
 
-    this.part(buildHullGeometry(), paint, this.visual, 'hull');
-    this.part(buildDeckGeometry(), paint, this.visual, 'deck');
-    this.part(buildCowlingGeometry(), paint, this.visual, 'cowling');
-    this.part(buildSponsonGeometry(-1), paint, this.visual, 'sponsonPort');
-    this.part(buildSponsonGeometry(1), paint, this.visual, 'sponsonStarboard');
+    this.parts(
+      [
+        buildHullGeometry(),
+        buildDeckGeometry(),
+        buildCowlingGeometry(),
+        buildSponsonGeometry(-1),
+        buildSponsonGeometry(1),
+      ],
+      paint,
+      this.visual,
+      'shell',
+    );
 
     // RACE NUMBER.
     //
@@ -181,11 +189,20 @@ export class Boat {
     });
     const noOutline = { noOutline: true };
     const number = ci + 1;
-    for (const side of [-1, 1] as const) {
-      const tag = side < 0 ? 'Port' : 'Starboard';
-      this.part(buildRaceNumberInkGeometry(number, side), ink, this.visual, `numberInk${tag}`, noOutline);
-      this.part(buildRaceNumberGeometry(number, side), decal, this.visual, `number${tag}`, noOutline);
-    }
+    this.parts(
+      [buildRaceNumberInkGeometry(number, -1), buildRaceNumberInkGeometry(number, 1)],
+      ink,
+      this.visual,
+      'numberInk',
+      noOutline,
+    );
+    this.parts(
+      [buildRaceNumberGeometry(number, -1), buildRaceNumberGeometry(number, 1)],
+      decal,
+      this.visual,
+      'number',
+      noOutline,
+    );
 
     // Fine ink on the small parts. A 2.6 px line is right for a 5 m hull and
     // completely swallows a 7 cm rudder blade, which at race distance turns
@@ -276,6 +293,27 @@ export class Boat {
     this.geometries.push(geo);
     parent.add(mesh);
     return mesh;
+  }
+
+  /** Static same-material parts. One draw and one ink shell instead of N. */
+  private parts(
+    geos: BufferGeometry[],
+    mat: Material,
+    parent: Object3D,
+    name: string,
+    userData?: Record<string, unknown>,
+  ): Mesh {
+    const prepared = geos.map((g) => {
+      if (!g.index) return g;
+      const flat = g.toNonIndexed();
+      g.dispose();
+      return flat;
+    });
+    const merged = mergeGeometries(prepared, false);
+    for (const g of prepared) g.dispose();
+    if (!merged) throw new Error(`Boat: failed to merge ${name}`);
+    merged.computeVertexNormals();
+    return this.part(merged, mat, parent, name, userData);
   }
 
   // -------------------------------------------------------------------------

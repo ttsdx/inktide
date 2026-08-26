@@ -96,13 +96,19 @@ export class RacingLine {
   /** Spacing between the curvature samples the preview band reads. */
   readonly previewSpacing: number;
 
-  private readonly geometry: BufferGeometry;
+  private geometry: BufferGeometry;
   private readonly shared: Record<string, IUniform>;
   private readonly curvature = new Float32Array(PREVIEW_SAMPLES);
+  private readonly course: Course;
+  private readonly halfWidth: number;
+  private segmentLength: number;
 
   constructor(course: Course, opts: RacingLineOptions = {}) {
-    const halfWidth = opts.halfWidth ?? 1.8;
-    const segmentLength = opts.segmentLength ?? 1.8;
+    this.course = course;
+    this.halfWidth = opts.halfWidth ?? 1.8;
+    this.segmentLength = opts.segmentLength ?? 1.8;
+    const halfWidth = this.halfWidth;
+    const segmentLength = this.segmentLength;
     this.previewDistance = opts.previewDistance ?? 230;
     this.previewSpacing = this.previewDistance / (PREVIEW_SAMPLES - 1);
 
@@ -244,6 +250,23 @@ export class RacingLine {
   setCameraPlanes(near: number, far: number): void {
     this.shared.uCameraNear.value = near;
     this.shared.uCameraFar.value = far;
+  }
+
+  /**
+   * Segment density. The ribbon is one draw either way; what scales is the
+   * six Gerstner evaluations per vertex, ~1500 of them at 1.8 m spacing on a
+   * 2.7 km lap. Low/medium coarsen the strip. Chevrons are in UV along the
+   * spline, so they do not stretch with the segment length.
+   */
+  setQuality(tier: 'low' | 'medium' | 'high' | 'ultra'): void {
+    const spacing = tier === 'low' ? 3.6 : tier === 'medium' ? 2.5 : 1.8;
+    if (spacing === this.segmentLength) return;
+    this.segmentLength = spacing;
+    const next = buildRibbon(this.course, this.halfWidth, spacing);
+    this.mesh.geometry = next;
+    this.glow.geometry = next;
+    this.geometry.dispose();
+    this.geometry = next;
   }
 
   dispose(): void {
