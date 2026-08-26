@@ -22,9 +22,9 @@ import { LAYER_OCEAN, LAYER_OPAQUE, LAYER_OVERLAY, LAYER_SKY } from './layers.ts
  * THE POST CHAIN
  *
  * scene -> [MRT: colour + packed normal/depth]
- *       -> Sobel interior lines (reads attachment 1, composites onto colour)
+ *       -> Sobel interior-line MASK (reads attachment 1; may run below native res)
  *       -> bright extract + separable blur (graphic bloom, not photographic)
- *       -> composite + paper grade + vignette -> screen
+ *       -> composite (burn mask into colour) + paper grade + vignette -> screen
  *
  * The interior-line pass is the half of the outline system the inverted hull
  * cannot do: creases inside a silhouette (the join between a deck and a
@@ -44,6 +44,12 @@ export interface PipelineQuality {
   interiorLines: boolean;
   /** Downscale factor for the bloom chain (2 = half res). */
   bloomScale: number;
+  /**
+   * Downscale factor for the Sobel pass and the pre-ocean depth copy.
+   * 2 = half res: interior lines stay on at 2× without a full-res rewrite of
+   * the colour buffer. The composite samples the mask at native resolution.
+   */
+  lineScale: number;
 }
 
 /**
@@ -58,10 +64,10 @@ export interface PipelineQuality {
 const BLOOM_STRENGTH = 0.3;
 
 export const QUALITY_PRESETS: Record<'low' | 'medium' | 'high' | 'ultra', PipelineQuality> = {
-  low: { pixelRatio: 1.0, samples: 0, bloom: false, interiorLines: false, bloomScale: 4 },
-  medium: { pixelRatio: 1.0, samples: 0, bloom: true, interiorLines: true, bloomScale: 4 },
-  high: { pixelRatio: 2.0, samples: 0, bloom: true, interiorLines: true, bloomScale: 4 },
-  ultra: { pixelRatio: 2.0, samples: 4, bloom: true, interiorLines: true, bloomScale: 2 },
+  low: { pixelRatio: 1.0, samples: 0, bloom: false, interiorLines: false, bloomScale: 4, lineScale: 2 },
+  medium: { pixelRatio: 1.0, samples: 0, bloom: true, interiorLines: true, bloomScale: 4, lineScale: 1 },
+  high: { pixelRatio: 2.0, samples: 0, bloom: false, interiorLines: true, bloomScale: 4, lineScale: 2 },
+  ultra: { pixelRatio: 2.0, samples: 4, bloom: true, interiorLines: true, bloomScale: 2, lineScale: 1 },
 };
 
 export class CelPipeline {
@@ -97,6 +103,8 @@ export class CelPipeline {
     this.quality = { ...quality };
     this.createTargets(1, 1);
     this.createPasses();
+    this.compositePass.uniforms.uBloomStrength.value = this.quality.bloom ? BLOOM_STRENGTH : 0;
+    this.compositePass.uniforms.uInteriorLines.value = this.quality.interiorLines ? 1 : 0;
   }
 
   private createTargets(w: number, h: number): void {
@@ -123,9 +131,10 @@ export class CelPipeline {
     this.main.textures[1].colorSpace = NoColorSpace;
 
     const half = (v: number) => Math.max(1, Math.floor(v));
+    const { w: lw, h: lh } = this.lineDims(w, h);
 
     this.lines?.dispose();
-    this.lines = new WebGLRenderTarget(w, h, {
+    this.lines = new WebGLRenderTarget(lw, lh, {
       type,
       format: RGBAFormat,
       minFilter: LinearFilter,
@@ -136,9 +145,10 @@ export class CelPipeline {
 
     // Scene depth copy: the ocean samples this to find the waterline against
     // hulls. Nearest filtering — an interpolated depth is a depth that is not
-    // on any surface, and the foam threshold would smear.
+    // on any surface, and the foam threshold would smear. Sized with the Sobel
+    // target so the 2× play path does not pay a second full-res blit.
     this.depthCopy?.dispose();
-    this.depthCopy = new WebGLRenderTarget(w, h, {
+    this.depthCopy = new WebGLRenderTarget(lw, lh, {
       type,
       format: RGBAFormat,
       minFilter: NearestFilter,
@@ -166,7 +176,6 @@ export class CelPipeline {
     this.sobelPass = new FullScreenPass(
       SOBEL_FRAG,
       {
-        tColor: { value: null },
         tNormalDepth: { value: null },
         /** The post-ocean attachment, used only to reject drowned pixels. */
         tPostND: { value: null },
@@ -201,11 +210,8 @@ export class CelPipeline {
         // 1.07% at 0.13, so tightening past 0.20 starts eating real creases.
         uGrazeReject: { value: 0.3 },
         uLineStrength: { value: 0.95 },
-        uInk: { value: PALETTE.ink.clone() },
         uCameraFar: { value: 4000 },
         uScale: { value: 1.0 },
-        /** Debug: output the isolated line mask instead of the graded frame. */
-        uLineMask: { value: 0 },
       },
       'SobelInteriorLines',
     );
@@ -238,7 +244,9 @@ export class CelPipeline {
       COMPOSITE_FRAG,
       {
         tColor: { value: null },
+        tLines: { value: null },
         tBloom: { value: null },
+        uInteriorLines: { value: 0 },
         uBloomStrength: { value: BLOOM_STRENGTH },
         uVignette: { value: 0.18 },
         // Swept as a 3x3 grid against the knot frame and scored on mean
@@ -266,6 +274,11 @@ export class CelPipeline {
     );
   }
 
+  private lineDims(w: number, h: number): { w: number; h: number } {
+    const s = Math.max(1, this.quality.lineScale);
+    return { w: Math.max(1, Math.floor(w / s)), h: Math.max(1, Math.floor(h / s)) };
+  }
+
   setSize(cssWidth: number, cssHeight: number, pixelRatio: number): void {
     this.size.set(cssWidth, cssHeight);
     const w = Math.max(2, Math.floor(cssWidth * pixelRatio));
@@ -274,8 +287,9 @@ export class CelPipeline {
     this.fbSize.set(w, h);
 
     this.main.setSize(w, h);
-    this.lines.setSize(w, h);
-    this.depthCopy.setSize(w, h);
+    const { w: lw, h: lh } = this.lineDims(w, h);
+    this.lines.setSize(lw, lh);
+    this.depthCopy.setSize(lw, lh);
     const bw = Math.max(1, Math.floor(w / this.quality.bloomScale));
     const bh = Math.max(1, Math.floor(h / this.quality.bloomScale));
     this.bright.setSize(bw, bh);
@@ -286,14 +300,16 @@ export class CelPipeline {
   setQuality(q: Partial<PipelineQuality>): void {
     const samplesChanged = q.samples !== undefined && q.samples !== this.quality.samples;
     const scaleChanged = q.bloomScale !== undefined && q.bloomScale !== this.quality.bloomScale;
+    const lineChanged = q.lineScale !== undefined && q.lineScale !== this.quality.lineScale;
     Object.assign(this.quality, q);
-    if (samplesChanged || scaleChanged) {
+    if (samplesChanged || scaleChanged || lineChanged) {
       this.createTargets(this.fbSize.x, this.fbSize.y);
     }
     // render() only ever forces the strength to zero, so that a tuning sweep on
     // uBloomStrength is not overwritten on the next frame; the tier change is
     // the one place the value has to be put back.
     this.compositePass.uniforms.uBloomStrength.value = this.quality.bloom ? BLOOM_STRENGTH : 0;
+    this.compositePass.uniforms.uInteriorLines.value = this.quality.interiorLines ? 1 : 0;
   }
 
   get normalDepthTexture() {
@@ -302,10 +318,6 @@ export class CelPipeline {
 
   setDebugView(mode: number): void {
     this.compositePass.uniforms.uDebugView.value = mode;
-    // Mode 3 is produced inside the Sobel pass rather than the composite,
-    // because the line mask only exists there; the composite then passes it
-    // through ungraded so the taps show the raw mask, not a graded version of it.
-    this.sobelPass.uniforms.uLineMask.value = mode === 3 ? 1 : 0;
   }
 
   /** Poke a single pass uniform by name. Used for tuning sweeps from the harness. */
@@ -364,7 +376,7 @@ export class CelPipeline {
     if (this.quality.interiorLines) {
       this.copyPass.uniforms.tColor.value = this.main.textures[1];
       this.copyPass.render(r, this.depthCopy);
-      this.onDepthReady?.(this.depthCopy.texture, w, h);
+      this.onDepthReady?.(this.depthCopy.texture, this.depthCopy.width, this.depthCopy.height);
     }
 
     // --- ocean. No clear: must depth-test against opaque geometry.
@@ -390,12 +402,11 @@ export class CelPipeline {
     camera.layers.mask = prevMask;
     r.autoClear = prevAutoClear;
 
-    let colorTex = this.main.textures[0];
+    const colorTex = this.main.textures[0];
 
-    // --- 2. Sobel interior lines ---
+    // --- 2. Sobel interior lines (mask only; colour stays native-res) ---
     if (this.quality.interiorLines) {
       const u = this.sobelPass.uniforms;
-      u.tColor.value = colorTex;
       // THE PRE-OCEAN SNAPSHOT, not the final attachment.
       //
       // depthCopy is taken between the opaque slice and the ocean slice — it
@@ -413,12 +424,11 @@ export class CelPipeline {
       // colour and no interior ink at all.
       u.tNormalDepth.value = this.depthCopy.texture;
       u.tPostND.value = this.main.textures[1];
-      (u.uTexel.value as Vector2).copy(texel);
-      // Keep the line one device pixel wide no matter the pixel ratio, so the
-      // ink weight matches the inverted-hull lines at every resolution.
-      u.uScale.value = Math.max(1, Math.round(this.fbSize.y / 1080));
+      // Kernel is one *output* pixel. On the 2× play path the mask is half-res,
+      // so that is one CSS pixel — the same weight medium draws at 1×.
+      (u.uTexel.value as Vector2).set(1 / this.lines.width, 1 / this.lines.height);
+      u.uScale.value = Math.max(1, Math.round(this.lines.height / 540));
       this.sobelPass.render(r, this.lines);
-      colorTex = this.lines.texture;
     }
 
     // --- 3. graphic bloom ---
@@ -451,6 +461,8 @@ export class CelPipeline {
     // --- 4. composite to screen ---
     const cu = this.compositePass.uniforms;
     cu.tColor.value = colorTex;
+    cu.tLines.value = this.lines.texture;
+    cu.uInteriorLines.value = this.quality.interiorLines ? 1 : 0;
     cu.tBloom.value = bloomTex;
     cu.tDebug.value = this.main.textures[1];
     if (!this.quality.bloom) cu.uBloomStrength.value = 0;
@@ -514,7 +526,6 @@ precision highp float;
 in vec2 vUv;
 layout(location = 0) out vec4 outColor;
 
-uniform sampler2D tColor;
 uniform sampler2D tNormalDepth;
 uniform sampler2D tPostND;
 uniform vec2 uTexel;
@@ -524,8 +535,6 @@ uniform float uSilhouetteReject;
 uniform float uGrazeReject;
 uniform float uLineStrength;
 uniform float uScale;
-uniform float uLineMask;
-uniform vec3 uInk;
 
 vec3 decodeNormal(vec4 nd) { return nd.xyz * 2.0 - 1.0; }
 
@@ -578,7 +587,7 @@ void main() {
   // On the pre-ocean buffer, open water reads as the sky's opt-out and lands
   // here, which is the whole point.
   if (optedOut(c)) {
-    outColor = uLineMask > 0.5 ? vec4(1.0) : texture(tColor, vUv);
+    outColor = vec4(0.0);
     return;
   }
 
@@ -619,7 +628,7 @@ void main() {
   // comfortably above the half-float depth buffer's resolution at these ranges
   // and far below any gap that could be a real crease.
   if (postMin < c.w * 0.985 || postMin < c.w - 1.5e-5) {
-    outColor = uLineMask > 0.5 ? vec4(1.0) : texture(tColor, vUv);
+    outColor = vec4(0.0);
     return;
   }
 
@@ -708,15 +717,7 @@ void main() {
   // silhouettes out to the horizon regardless.
   line *= 1.0 - smoothstep(0.0065, 0.0115, c.w);
   line = clamp(line * uLineStrength, 0.0, 1.0);
-
-  if (uLineMask > 0.5) {
-    outColor = vec4(vec3(1.0 - line), 1.0);
-    return;
-  }
-
-  vec4 col = texture(tColor, vUv);
-  col.rgb = mix(col.rgb, uInk, line);
-  outColor = col;
+  outColor = vec4(line, 0.0, 0.0, 1.0);
 }
 `;
 
@@ -781,9 +782,11 @@ in vec2 vUv;
 layout(location = 0) out vec4 outColor;
 
 uniform sampler2D tColor;
+uniform sampler2D tLines;
 uniform sampler2D tBloom;
 uniform sampler2D tDebug;
 uniform float uDebugView;
+uniform float uInteriorLines;
 uniform float uBloomStrength;
 uniform float uVignette;
 uniform float uSaturation;
@@ -810,11 +813,19 @@ void main() {
     vec4 nd = texture(tDebug, vUv);
     if (uDebugView < 1.5) { outColor = vec4(nd.rgb, 1.0); return; }
     if (uDebugView < 2.5) { outColor = vec4(vec3(nd.w * 12.0), 1.0); return; }
-    // Mode 3: tColor already holds the isolated mask, courtesy of uLineMask.
-    if (uDebugView < 3.5) { outColor = vec4(texture(tColor, vUv).rgb, 1.0); return; }
+    // Mode 3: isolated interior-line mask (white lines on paper).
+    if (uDebugView < 3.5) {
+      float line = texture(tLines, vUv).r;
+      outColor = vec4(vec3(1.0 - line), 1.0);
+      return;
+    }
   }
 
   vec3 c = texture(tColor, vUv).rgb * uExposure;
+
+  if (uInteriorLines > 0.5) {
+    c = mix(c, INK, texture(tLines, vUv).r);
+  }
 
   if (uBloomStrength > 0.0) {
     c += texture(tBloom, vUv).rgb * uBloomStrength;

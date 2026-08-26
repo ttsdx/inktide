@@ -142,6 +142,7 @@ const report = await page.evaluate(() => {
       samples: eng.quality.samples,
       bloom: eng.quality.bloom,
       interiorLines: eng.quality.interiorLines,
+      lineScale: eng.quality.lineScale,
       drawCalls: s.drawCalls,
       oceanTriangles: s.oceanTriangles,
       wakeResolution: s.wakeResolution,
@@ -185,7 +186,11 @@ check(
 const t = report.tiers;
 check(
     t.ultra.samples > t.high.samples &&
+    t.ultra.bloom &&
     t.medium.bloom &&
+    !t.high.bloom &&
+    t.high.lineScale === 2 &&
+    t.ultra.lineScale === 1 &&
     t.high.interiorLines &&
     t.medium.interiorLines &&
     !t.low.bloom &&
@@ -194,7 +199,7 @@ check(
     t.ultra.pixelRatio >= t.high.pixelRatio,
   'the tier ladder sheds work in the right order',
   `res ${t.ultra.pixelRatio}>=${t.high.pixelRatio} retina, msaa ${t.ultra.samples}>${t.high.samples}, ` +
-    `lines stay on through medium, bloom/lines off at low`,
+    `2x high skips bloom, half-res lines, lines stay on through medium, bloom/lines off at low`,
 );
 check(
   report.recovered.pixelRatio > report.bottom.pixelRatio,
@@ -240,12 +245,12 @@ check(
 );
 
 console.log('\nQUALITY TIERS');
-console.log('  tier     pixelRatio  msaa  bloom  lines  draws  oceanTris  wake');
+console.log('  tier     pixelRatio  msaa  bloom  lines  lineScale  draws  oceanTris  wake');
 for (const [t, v] of Object.entries(report.tiers)) {
   console.log(
     `  ${t.padEnd(8)} ${String(v.pixelRatio).padEnd(11)} ${String(v.samples).padEnd(5)} ` +
       `${String(v.bloom).padEnd(6)} ${String(v.interiorLines).padEnd(6)} ` +
-      `${String(v.drawCalls).padEnd(6)} ${String(v.oceanTriangles).padEnd(10)} ${v.wakeResolution}`,
+      `${String(v.lineScale).padEnd(10)} ${String(v.drawCalls).padEnd(6)} ${String(v.oceanTriangles).padEnd(10)} ${v.wakeResolution}`,
   );
 }
 console.log(

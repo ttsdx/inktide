@@ -153,10 +153,11 @@ are pulled when a frame runs long:
 1. **Adaptive resolution.** A windowed median of frame time (not a mean — one GC
    spike should not drop a tier) moves the pixel ratio in small steps with a long
    cooldown, so the controller cannot oscillate.
-2. **Quality tiers** drop MSAA (ultra only), then the interior-line pass, then
-   bloom. Default play (`high`) is **2× retina with no MSAA** so a mid-range GPU
-   is not paying 4× samples on every ocean pixel. Ultra keeps 4× MSAA for
-   captures. The same callback also rebuilds the
+2. **Quality tiers.** Default play (`high`) is **2× retina, no MSAA, no bloom**,
+   with interior lines and the pre-ocean depth copy at half-res so the 2× path
+   does not rewrite the colour buffer at native size. Ultra keeps 4× MSAA,
+   native-res lines, and bloom for captures. Medium is 1× with bloom and lines.
+   Low drops both post passes. The same callback also rebuilds the
    ocean disc coarser, shrinks the wake field, trims spray, and hides distant
    AI riders. HUD canvas density follows the same ladder (1× on low/medium,
    2× on high and ultra). Low hides the cloud dome overdraw entirely.

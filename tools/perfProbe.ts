@@ -61,7 +61,7 @@ console.log('\nOCEAN DISC');
   const discs = [
     ['low', 128, 48],
     ['medium', 192, 72],
-    ['high', 192, 76],
+    ['high', 192, 72],
     ['ultra', 384, 132],
   ];
   for (const [tier, segments, rings] of discs) {
@@ -102,7 +102,8 @@ console.log(`
     3. WakeField: ping-pong target, 256² on low through 1024² on ultra.
 
   The levers, in the order the adaptive controller pulls them: pixel ratio,
-  then MSAA, then interior lines, then bloom. Ocean density, wake resolution
+  then MSAA, then bloom (off at high), then half-res interior lines (high),
+  then dropping the line pass entirely (low). Ocean density, wake resolution
   and spray count move on the same callback — they used to exist as knobs
   that were never turned.
 `);
