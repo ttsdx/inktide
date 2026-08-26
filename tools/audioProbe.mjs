@@ -178,6 +178,8 @@ const report = await page.evaluate(async () => {
     'lapComplete',
     'finish',
     'uiConfirm',
+    'pickup',
+    'hazardHit',
   ]) {
     audio.play(name, 1);
     // Sample a few times across the transient and keep the loudest.

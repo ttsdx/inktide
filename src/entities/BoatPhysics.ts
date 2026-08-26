@@ -86,7 +86,7 @@ function makeRng(seed: number): () => number {
 
 export class BoatPhysics implements BoatState {
   readonly id: number;
-  readonly spec: BoatSpec;
+  spec: BoatSpec;
   /** Seeded from the boat id so each hull jitters differently but repeatably. */
   private readonly rng: () => number;
 
@@ -111,6 +111,11 @@ export class BoatPhysics implements BoatState {
   submersion = 0;
   pitch = 0;
   roll = 0;
+  /**
+   * Seconds of reduced control remaining after a hazard hit. Circuit never
+   * writes this; rogue collisions do. Decays in `update`.
+   */
+  stunTime = 0;
 
   /** Yaw in radians, 0 = facing +Z. Driven directly by steering. */
   private yaw = 0;
@@ -200,9 +205,13 @@ export class BoatPhysics implements BoatState {
     const dt = ctx.dt;
     const h = dt / SUBSTEPS;
 
-    const throttle = MathUtils.clamp(cmd.throttle, 0, 1);
+    const stunned = this.stunTime > 0;
+    if (stunned) this.stunTime = Math.max(0, this.stunTime - dt);
+    const hands = stunned ? 0.28 : 1;
+
+    const throttle = MathUtils.clamp(cmd.throttle, 0, 1) * hands;
     const brake = MathUtils.clamp(cmd.brake, 0, 1);
-    const steer = MathUtils.clamp(cmd.steer, -1, 1);
+    const steer = MathUtils.clamp(cmd.steer, -1, 1) * hands;
     this.throttleLevel += (throttle - this.throttleLevel) * Math.min(1, 8 * dt);
     this.steerLevel += (steer - this.steerLevel) * Math.min(1, 12 * dt);
 
@@ -562,7 +571,9 @@ export class BoatPhysics implements BoatState {
       // Charge rate follows the slip angle: a lazy four-wheel-drift earns less
       // than a committed sideways slide at the same steering input.
       const slipAngle = Math.abs(Math.atan2(this.lateralSpeed, Math.max(sp, 1)));
-      const rate = MathUtils.clamp(slipAngle / 0.42, 0, 1) * 1.15 + this.driftAmount * 0.25;
+      const chargeMul = this.spec.boostChargeMul ?? 1;
+      const rate =
+        (MathUtils.clamp(slipAngle / 0.42, 0, 1) * 1.15 + this.driftAmount * 0.25) * chargeMul;
       const before = this.boostCharge;
       this.boostCharge = Math.min(1, this.boostCharge + rate * dt);
       if (before < 1 && this.boostCharge >= 1) effects?.flash(PALETTE.racingLine, 0.10);
@@ -574,7 +585,8 @@ export class BoatPhysics implements BoatState {
       // Released.
       this.driftHeld = false;
       if (this.boostCharge > 0.28 && this.boostCooldown <= 0) {
-        this.boostTime = 0.55 + this.boostCharge * 1.35;
+        const windowMul = this.spec.boostWindowMul ?? 1;
+        this.boostTime = (0.55 + this.boostCharge * 1.35) * windowMul;
         this.boostCooldown = 0.35;
         effects?.shake(0.28 + this.boostCharge * 0.3, 30);
         effects?.flash(PALETTE.racer[this.spec.colorIndex], 0.16);
@@ -747,7 +759,55 @@ export class BoatPhysics implements BoatState {
     this.driftRaw = 0;
     this.airborne = false;
     this.airTime = 0;
+    this.stunTime = 0;
     this.updateBasis();
+  }
+
+  /**
+   * Immovable circle in the XZ plane — rocks, posts, wreck buoys.
+   *
+   * Same contact style as boat-to-boat: positional correction plus an impulse
+   * on the closing component, plus a readable speed scrub. Returns the impact
+   * magnitude (0 if no overlap) so the caller can fire spray and audio.
+   */
+  resolveStaticCollision(x: number, z: number, radius: number): number {
+    _tmp.set(this.position.x - x, 0, this.position.z - z);
+    const dist = _tmp.length();
+    const minDist = HULL_COLLISION_RADIUS + radius;
+    if (dist >= minDist) return 0;
+    if (dist < 1e-4) _tmp.set(1, 0, 0);
+    else _tmp.divideScalar(dist);
+
+    const overlap = minDist - dist;
+    this.position.addScaledVector(_tmp, overlap);
+
+    const closing = this.velocity.x * -_tmp.x + this.velocity.z * -_tmp.z;
+    if (closing <= 0) return 0;
+
+    const restitution = 0.32;
+    const j = (1 + restitution) * closing;
+    this.velocity.x += _tmp.x * j;
+    this.velocity.z += _tmp.z * j;
+    this.velocity.x *= 0.72;
+    this.velocity.z *= 0.72;
+    this.yawRate += (_tmp.x * this.forward.z - _tmp.z * this.forward.x) * 1.4;
+
+    const impact = closing + overlap;
+    this.collisionImpact = Math.max(this.collisionImpact, impact);
+    const stun = (0.22 + Math.min(0.45, impact * 0.06)) * (this.spec.stunMul ?? 1);
+    this.stunTime = Math.max(this.stunTime, stun);
+    return impact;
+  }
+
+  /** Soft corridor current: planar acceleration, no teleport. */
+  applyPlanarAccel(ax: number, az: number, dt: number): void {
+    this.velocity.x += ax * dt;
+    this.velocity.z += az * dt;
+  }
+
+  /** Momentary handling pickup: dump a ready-made boost into the window. */
+  grantBoost(seconds: number): void {
+    this.boostTime = Math.max(this.boostTime, seconds * (this.spec.boostWindowMul ?? 1));
   }
 
   /** Drop the boat onto the water surface without changing heading. */

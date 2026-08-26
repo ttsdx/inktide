@@ -22,10 +22,19 @@ import { Spray } from './world/Spray.ts';
 import { BoatPhysics } from './entities/BoatPhysics.ts';
 import { BOAT_SPECS, HULL_BEAM, RIDER_MOUNT } from './entities/hullSpec.ts';
 import { Rider } from './entities/Rider.ts';
-import { Hud, type HudCorner, type HudCourse, type HudData } from './ui/Hud.ts';
+import { Hud, type HudCorner, type HudCourse, type HudData, type HudRogue } from './ui/Hud.ts';
 import { Screens, type ScreenResultRow, type ScreensData } from './ui/Screens.ts';
 import { AudioEngine } from './audio/AudioEngine.ts';
-import type { BoatCommand, BoatState, RiderPose } from './contracts.ts';
+import type { BoatCommand, BoatState, GameMode, RiderPose } from './contracts.ts';
+import {
+  ROGUE_CATALOG,
+  ROGUE_ORIGIN_X,
+  ROGUE_ORIGIN_Z,
+  ROGUE_RUN_NAME,
+  RogueDirector,
+  timeFormulaLabel,
+} from './rogue/RogueDirector.ts';
+import { RogueField } from './rogue/RogueField.ts';
 
 /**
  * Top-level game object. Owns the engine, the world and the race, and is the
@@ -67,6 +76,8 @@ export class Game {
   gates: GateField | null = null;
   buoys: BuoyField | null = null;
   director: RaceDirector | null = null;
+  rogue: RogueDirector | null = null;
+  rogueField: RogueField | null = null;
 
   hud: Hud | null = null;
   screens: Screens | null = null;
@@ -75,6 +86,12 @@ export class Game {
   readonly racers: Racer[] = [];
   /** Scene root for everything race-related, so it can be rebuilt on restart. */
   private readonly raceRoot = new Group();
+
+  /** Player-facing session. Title is the default human boot. */
+  private session: 'title' | GameMode = 'title';
+  private titleIndex = 0;
+  private shopHighlight = 0;
+  private skipTitle = false;
 
   private started = false;
   private paused = false;
@@ -176,6 +193,14 @@ export class Game {
     this.buoys.root.traverse((o) => o.layers.set(LAYER_OPAQUE));
     this.raceRoot.add(this.buoys.root);
 
+    this.rogue = new RogueDirector();
+    this.rogue.onEvent = this.onRogueEvent;
+    this.rogueField = new RogueField();
+    this.rogueField.root.traverse((o) => {
+      if (o.layers.mask === 0) o.layers.set(LAYER_OPAQUE);
+    });
+    this.raceRoot.add(this.rogueField.root);
+
     // --- racers ------------------------------------------------------------
     this.buildRacers();
 
@@ -185,11 +210,23 @@ export class Game {
     // --- UI and audio --------------------------------------------------------
     this.hud = new Hud(this.hudRoot);
     this.screens = new Screens(this.hudRoot);
-    this.screens.onStart = () => this.beginRace();
+    this.screens.onStart = () => this.enterCircuit();
+    this.screens.onStartCircuit = () => this.enterCircuit();
+    this.screens.onStartRogue = () => this.enterRogue();
     this.screens.onResume = () => {
       this.userPaused = false;
+      this.audio.setMasterGain(0.85);
     };
     this.screens.onRestart = () => this.restart();
+    this.screens.onQuitToTitle = () => this.quitToTitle();
+    this.screens.onBuyUpgrade = (id) => this.buyUpgrade(id);
+    this.screens.onContinueRun = () => this.continueRogue();
+    this.screens.onTitleIndex = (i) => {
+      this.titleIndex = i;
+    };
+    this.screens.onShopHighlight = (i) => {
+      this.shopHighlight = i;
+    };
 
     this.hudCourse = this.buildHudCourse();
 
@@ -203,7 +240,18 @@ export class Game {
     window.addEventListener('pointerdown', unlock);
     window.addEventListener('keydown', unlock);
 
-    this.director.start();
+    this.skipTitle =
+      url.searchParams.get('harness') === '1' || url.searchParams.get('skipTitle') === '1';
+    const modeParam = url.searchParams.get('mode');
+    const seedParam = url.searchParams.get('seed');
+    const pinnedSeed = seedParam ? Number.parseInt(seedParam, 10) : undefined;
+
+    if (this.skipTitle) {
+      if (modeParam === 'rogue') this.enterRogue(pinnedSeed);
+      else this.enterCircuit();
+    } else {
+      this.sitOnTitle();
+    }
 
     if (url.searchParams.get('probe') === '1') {
       this.probe = new ProbeScene();
@@ -215,7 +263,7 @@ export class Game {
       scene.add(this.waterline.root);
     }
 
-    this.rig.mode = 'chase';
+    this.rig.mode = this.session === 'title' ? 'flyby' : 'chase';
     if (this.player) this.snapCameraToPlayer();
 
     this.engine.onUpdate(this.update);
@@ -324,22 +372,90 @@ export class Game {
 
   /** Leave the title card and run the countdown. */
   beginRace(): void {
-    void this.audio.resume();
-    this.director?.start();
+    this.enterCircuit();
   }
 
-  /** Reset every racer to the grid and restart the countdown. */
+  /** Reset every racer to the grid and restart the countdown. Circuit only. */
   restart(): void {
+    if (this.session === 'rogue') {
+      if (this.rogue?.phase === 'runResults') {
+        this.enterRogue();
+        return;
+      }
+      this.restartRogueStage();
+      return;
+    }
     const course = this.course;
     if (!course) return;
     const t = this.simTime;
+    this.restoreCircuitPack();
     for (let i = 0; i < this.racers.length; i++) {
       const r = this.racers[i];
       const slot = course.startGrid[i % course.startGrid.length];
+      r.physics.spec = { ...BOAT_SPECS[i] };
       r.physics.respawn(slot.position.clone(), slot.heading, t);
       r.ai?.reset();
       r.celebrate = 0;
       r.pose = Rider.restPose();
+    }
+    this.director?.reset();
+    this.director?.start();
+    this.userPaused = false;
+    this.audio.setMasterGain(0.85);
+    this.rig.mode = 'chase';
+    this.lastPlayerT = 0;
+    this.snapCameraToPlayer();
+    this.audio.play('uiConfirm');
+  }
+
+  private sitOnTitle(): void {
+    this.session = 'title';
+    this.userPaused = false;
+    this.audio.setMasterGain(0.85);
+    this.showCircuitWorld(true);
+    this.rogueField?.hide();
+    if (this.rogue) this.rogue.phase = 'idle';
+    this.director?.reset();
+    this.restoreCircuitPack();
+    const course = this.course;
+    const t = this.simTime;
+    if (course) {
+      for (let i = 0; i < this.racers.length; i++) {
+        const r = this.racers[i];
+        const slot = course.startGrid[i % course.startGrid.length];
+        r.physics.spec = { ...BOAT_SPECS[i] };
+        r.physics.respawn(slot.position.clone(), slot.heading, t);
+        r.ai?.reset();
+        r.celebrate = 0;
+      }
+    }
+    this.rig.mode = 'flyby';
+    this.rig.orbitSpeed = 0.18;
+    if (this.player) {
+      this.rig.orbitCenter.copy(this.player.physics.position);
+      this.snapCameraToPlayer();
+    }
+  }
+
+  private enterCircuit(): void {
+    void this.audio.resume();
+    this.session = 'circuit';
+    this.userPaused = false;
+    this.audio.setMasterGain(0.85);
+    this.showCircuitWorld(true);
+    this.rogueField?.hide();
+    this.restoreCircuitPack();
+    const course = this.course;
+    const t = this.simTime;
+    if (course) {
+      for (let i = 0; i < this.racers.length; i++) {
+        const r = this.racers[i];
+        const slot = course.startGrid[i % course.startGrid.length];
+        r.physics.spec = { ...BOAT_SPECS[i] };
+        r.physics.respawn(slot.position.clone(), slot.heading, t);
+        r.ai?.reset();
+        r.celebrate = 0;
+      }
     }
     this.director?.reset();
     this.director?.start();
@@ -348,6 +464,150 @@ export class Game {
     this.snapCameraToPlayer();
     this.audio.play('uiConfirm');
   }
+
+  private enterRogue(seed?: number): void {
+    void this.audio.resume();
+    const director = this.rogue;
+    const field = this.rogueField;
+    const player = this.player;
+    if (!director || !field || !player) return;
+    this.session = 'rogue';
+    this.userPaused = false;
+    this.shopHighlight = 0;
+    this.audio.setMasterGain(0.85);
+    this.showCircuitWorld(false);
+    this.hideAiPack();
+    const runSeed = Number.isFinite(seed) && (seed as number) > 0 ? (seed as number) : this.freshSeed();
+    director.startRun(runSeed >>> 0);
+    player.physics.spec = director.spec;
+    this.spawnRoguePlayer();
+    field.buildStage(
+      director.seed,
+      director.stage,
+      ROGUE_ORIGIN_X,
+      ROGUE_ORIGIN_Z,
+      director.target,
+      director.corridorHalf,
+    );
+    this.rig.mode = 'chase';
+    this.snapCameraToPlayer();
+    this.audio.play('uiConfirm');
+  }
+
+  private restartRogueStage(): void {
+    const director = this.rogue;
+    const field = this.rogueField;
+    if (!director || !field || this.session !== 'rogue') return;
+    this.userPaused = false;
+    this.audio.setMasterGain(0.85);
+    director.restartStage();
+    this.player!.physics.spec = director.spec;
+    this.spawnRoguePlayer();
+    field.buildStage(
+      director.seed,
+      director.stage,
+      ROGUE_ORIGIN_X,
+      ROGUE_ORIGIN_Z,
+      director.target,
+      director.corridorHalf,
+    );
+    this.rig.mode = 'chase';
+    this.snapCameraToPlayer();
+    this.audio.play('uiConfirm');
+  }
+
+  private continueRogue(): void {
+    const director = this.rogue;
+    const field = this.rogueField;
+    if (!director || !field) return;
+    director.continueRun();
+    this.shopHighlight = 0;
+    this.player!.physics.spec = director.spec;
+    this.spawnRoguePlayer();
+    field.buildStage(
+      director.seed,
+      director.stage,
+      ROGUE_ORIGIN_X,
+      ROGUE_ORIGIN_Z,
+      director.target,
+      director.corridorHalf,
+    );
+    this.userPaused = false;
+    this.rig.mode = 'chase';
+    this.snapCameraToPlayer();
+    this.audio.play('uiConfirm');
+  }
+
+  private buyUpgrade(id: string): void {
+    const director = this.rogue;
+    if (!director) return;
+    if (director.buy(id)) {
+      this.audio.play('uiConfirm');
+      if (this.player) this.player.physics.spec = director.spec;
+    } else {
+      this.audio.play('uiMove');
+    }
+  }
+
+  private quitToTitle(): void {
+    this.sitOnTitle();
+    this.audio.play('uiConfirm');
+  }
+
+  private spawnRoguePlayer(): void {
+    const p = this.player;
+    if (!p) return;
+    p.physics.respawn(new Vector3(ROGUE_ORIGIN_X, 0, ROGUE_ORIGIN_Z + 6), 0, this.simTime);
+    p.celebrate = 0;
+    p.pose = Rider.restPose();
+  }
+
+  private showCircuitWorld(on: boolean): void {
+    if (this.racingLine) this.racingLine.mesh.visible = on;
+    if (this.gates) this.gates.root.visible = on;
+    if (this.buoys) this.buoys.root.visible = on;
+  }
+
+  private hideAiPack(): void {
+    for (let i = 1; i < this.racers.length; i++) {
+      this.racers[i].boat.root.visible = false;
+      this.racers[i].rider.root.visible = false;
+    }
+  }
+
+  private restoreCircuitPack(): void {
+    for (const r of this.racers) {
+      r.boat.root.visible = true;
+      r.rider.root.visible = true;
+    }
+  }
+
+  private freshSeed(): number {
+    return (Math.imul(Date.now() ^ (this.engine.frame * 2654435761), 1597334677) >>> 0) || 1;
+  }
+
+  private readonly onRogueEvent = (e: { type: string; kind?: string }): void => {
+    switch (e.type) {
+      case 'stageClear':
+        this.effects.flash(new Color(0x39ff9c), 0.2);
+        this.audio.play('lapComplete');
+        this.rig.mode = 'orbit';
+        if (this.player) this.rig.orbitCenter.copy(this.player.physics.position);
+        break;
+      case 'runComplete':
+        this.effects.flash(new Color(0xffffff), 0.28);
+        this.audio.play('finish');
+        this.rig.mode = 'results';
+        if (this.player) this.rig.orbitCenter.copy(this.player.physics.position);
+        break;
+      case 'pickup':
+        this.audio.play(e.kind === 'boost' ? 'boostCharged' : 'pickup', 0.7);
+        this.effects.flash(e.kind === 'boost' ? new Color(0x39ff9c) : new Color(0xc4f52e), 0.08);
+        break;
+      default:
+        break;
+    }
+  };
 
   start(): void {
     if (this.started) return;
@@ -391,16 +651,23 @@ export class Game {
     if (this.paused) return;
     const control = this.input.update(dt);
 
-    if (control.pausePressed && this.director?.phase === 'racing') {
+    if (this.screens?.visible) {
+      const moved = this.screens.handleMenu(control.menuDelta, control.confirmPressed);
+      if (moved && control.menuDelta !== 0) this.audio.play('uiMove');
+    }
+
+    const canPause =
+      (this.session === 'circuit' && this.director?.phase === 'racing') ||
+      (this.session === 'rogue' && this.rogue?.phase === 'racing');
+    if (control.pausePressed && canPause) {
       this.userPaused = !this.userPaused;
       this.audio.play('uiMove');
       this.audio.setMasterGain(this.userPaused ? 0.15 : 0.85);
     }
 
     const uiCtx = { dt, elapsed: wallClock, frame: this.engine.frame };
-    if (this.userPaused) {
-      // The world is frozen, but the UI keeps animating so the pause overlay
-      // can slide in and the screens stay responsive.
+    const shopFrozen = this.session === 'rogue' && this.rogue?.phase === 'upgrade';
+    if (this.userPaused || shopFrozen) {
       this.updateUi(uiCtx);
       return;
     }
@@ -414,26 +681,25 @@ export class Game {
     // --- drive ---------------------------------------------------------------
     const director = this.director;
     const phase = director?.phase ?? 'racing';
-    // Throttle is locked out until the lights go green. Steering is not: being
-    // able to line the boat up on the grid while the countdown runs is what
-    // stops the start feeling like a cutscene you are watching.
-    const launched = phase === 'racing' || phase === 'finished' || phase === 'results';
+    const circuitLive = this.session === 'circuit';
+    const rogueLive = this.session === 'rogue' && this.rogue?.phase === 'racing';
+    const launched =
+      circuitLive && (phase === 'racing' || phase === 'finished' || phase === 'results');
+    const rogueGo = rogueLive;
 
     this.states.length = 0;
     for (const r of this.racers) this.states.push(r.physics);
 
-    for (let i = 0; i < this.racers.length; i++) {
+    const driveCount = this.session === 'rogue' ? 1 : this.racers.length;
+    for (let i = 0; i < driveCount; i++) {
       const r = this.racers[i];
       if (i === 0 && !this.autopilot) {
-        r.command.throttle = launched ? control.throttle : 0;
-        r.command.brake = launched ? control.brake : 0;
-        r.command.steer = control.steer;
-        r.command.drift = launched && control.drift;
-      } else if (i === 0 && this.autopilot && this.playerAI && director) {
-        // The player boat driven by the clean AI preset. Used by the screenshot
-        // harness so a shot can be defined at "the finish" or "the results
-        // screen" — moments a scripted throttle-only input can never reach,
-        // because it drives straight off the first corner.
+        const go = launched || rogueGo;
+        r.command.throttle = go ? control.throttle : 0;
+        r.command.brake = go ? control.brake : 0;
+        r.command.steer = this.session === 'title' ? 0 : control.steer;
+        r.command.drift = go && control.drift;
+      } else if (i === 0 && this.autopilot && this.playerAI && director && circuitLive) {
         const prog = director.get(0);
         if (prog) {
           const cmd = this.playerAI.update(r.physics, this.states, prog, prog, ctx);
@@ -442,7 +708,7 @@ export class Game {
           r.command.steer = cmd.steer;
           r.command.drift = launched && cmd.drift;
         }
-      } else if (r.ai && director) {
+      } else if (r.ai && director && circuitLive) {
         const prog = director.get(i);
         const playerProg = director.get(0);
         if (prog && playerProg) {
@@ -452,19 +718,27 @@ export class Game {
           r.command.steer = cmd.steer;
           r.command.drift = launched && cmd.drift;
         }
+      } else {
+        r.command.throttle = 0;
+        r.command.brake = 0;
+        r.command.steer = 0;
+        r.command.drift = false;
       }
       r.physics.update(r.command, ctx, i === 0 ? this.effects : null);
     }
 
-    // Boat-to-boat contact, all pairs. Four racers means six tests.
-    for (let a = 0; a < this.racers.length; a++) {
-      for (let b = a + 1; b < this.racers.length; b++) {
-        this.racers[a].physics.resolveBoatCollision(this.racers[b].physics);
+    if (circuitLive) {
+      for (let a = 0; a < this.racers.length; a++) {
+        for (let b = a + 1; b < this.racers.length; b++) {
+          this.racers[a].physics.resolveBoatCollision(this.racers[b].physics);
+        }
       }
+      director?.update(this.states, ctx);
+    } else if (this.session === 'title') {
+      director?.update(this.states, ctx);
+    } else if (rogueLive) {
+      this.tickRogue(dt, ctx);
     }
-
-    // --- race logic ----------------------------------------------------------
-    director?.update(this.states, ctx);
 
     this.cullRacers();
 
@@ -473,6 +747,7 @@ export class Game {
     this.contacts.length = 0;
 
     for (let i = 0; i < this.racers.length; i++) {
+      if (this.session === 'rogue' && i > 0) continue;
       const r = this.racers[i];
       const s = r.physics;
 
@@ -525,8 +800,8 @@ export class Game {
     // The cinematic orbit has to be told what to orbit. Left at its default it
     // circles the world origin, which is a kilometre from wherever the race
     // actually finished, so the results screen played over empty water.
-    if (this.rig.mode === 'results' || this.rig.mode === 'orbit') {
-      const winner = director?.standings()[0];
+    if (this.rig.mode === 'results' || this.rig.mode === 'orbit' || this.rig.mode === 'flyby') {
+      const winner = this.session === 'circuit' ? director?.standings()[0] : undefined;
       const focusBoat =
         winner && this.racers[winner.boatId] ? this.racers[winner.boatId] : this.player;
       if (focusBoat) {
@@ -536,7 +811,7 @@ export class Game {
     }
 
     this.syncChaseTarget();
-    if (control.cameraPressed) this.cycleCamera();
+    if (control.cameraPressed && this.session !== 'title') this.cycleCamera();
     this.rig.update(dt, this.chase, elapsed);
     this.keepCameraAboveWater(elapsed);
 
@@ -569,22 +844,33 @@ export class Game {
     // to be updated after the ocean has settled its fade band for this frame.
     const fade = this.ocean.detailFade;
 
-    if (this.gates) {
-      const next = director?.get(0)?.nextCheckpoint;
-      if (next !== undefined) this.gates.setActiveIndex(next);
-      this.gates.update(ctx, cam.position, fade.start, fade.end);
-    }
-    if (this.buoys) {
-      this.buoys.setFocus(focus);
-      this.buoys.setViewer(cam.position, fade.start, fade.end);
-      this.buoys.update(ctx);
-    }
+    if (this.session !== 'rogue') {
+      if (this.gates) {
+        const next = director?.get(0)?.nextCheckpoint;
+        if (next !== undefined) this.gates.setActiveIndex(next);
+        this.gates.update(ctx, cam.position, fade.start, fade.end);
+      }
+      if (this.buoys) {
+        this.buoys.setFocus(focus);
+        this.buoys.setViewer(cam.position, fade.start, fade.end);
+        this.buoys.update(ctx);
+      }
 
-    if (this.racingLine && this.course && this.player) {
-      this.racingLine.update(elapsed, cam.position);
-      const t = this.course.closestT(this.player.physics.position, this.lastPlayerT);
-      this.lastPlayerT = t;
-      this.updateCornerPreview(t);
+      if (this.racingLine && this.course && this.player) {
+        this.racingLine.update(elapsed, cam.position);
+        const t = this.course.closestT(this.player.physics.position, this.lastPlayerT);
+        this.lastPlayerT = t;
+        this.updateCornerPreview(t);
+      }
+    } else if (this.rogueField) {
+      this.rogueField.setViewer(cam.position, fade.start, fade.end);
+      const camObj = this.engine.camera;
+      this.rogueField.setOutlineViewport(
+        this.engine.renderer.domElement.height,
+        camObj.projectionMatrix.elements[5],
+        camObj.far,
+      );
+      this.rogueField.update(ctx);
     }
 
     if (control.resetPressed) this.respawnPlayer(elapsed);
@@ -592,6 +878,54 @@ export class Game {
     this.updateAudio(dt);
     this.updateUi(uiCtx);
   };
+
+  private tickRogue(dt: number, ctx: { dt: number; elapsed: number; frame: number }): void {
+    const director = this.rogue;
+    const field = this.rogueField;
+    const player = this.player;
+    if (!director || !field || !player) return;
+
+    const px = player.physics.position.x;
+    const pz = player.physics.position.z;
+    const half = director.corridorHalf;
+    const over = Math.abs(px - ROGUE_ORIGIN_X) - half;
+    if (over > 0) {
+      const sign = Math.sign(px - ROGUE_ORIGIN_X) || 1;
+      player.physics.applyPlanarAccel(-sign * (8 + over * 4.2), 0, dt);
+      const damp = Math.exp(-dt * (0.9 + over * 0.12));
+      player.physics.velocity.x *= damp;
+      player.physics.velocity.z *= Math.exp(-dt * (0.18 + over * 0.05));
+    }
+
+    const hits = field.queryHazards(px, pz, 3.4);
+    for (const h of hits) {
+      const impact = player.physics.resolveStaticCollision(h.x, h.z, h.radius);
+      if (impact > 2.2) {
+        this.audio.play('hazardHit', Math.min(1, impact / 10));
+        this.effects.shake(0.22 + Math.min(0.35, impact * 0.04), 28);
+        this.effects.spray({
+          position: player.physics.position.clone(),
+          velocity: player.physics.velocity.clone().multiplyScalar(0.15),
+          count: 10,
+          spread: 1.1,
+          size: 0.12,
+          life: 0.45,
+        });
+      }
+    }
+
+    const magnet = player.physics.spec.magnetRadius ?? 0;
+    const pickups = field.collectPickups(px, pz, magnet);
+    for (const kind of pickups) {
+      if (kind === 'orb') director.collectOrb();
+      else {
+        director.collectBoost();
+        player.physics.grantBoost(1.55);
+      }
+    }
+
+    director.update(pz, ctx);
+  }
 
   private readonly frustum = new Frustum();
   private readonly frustumMatrix = new Matrix4();
@@ -626,6 +960,11 @@ export class Game {
     const eye = cam.position;
     for (let i = 0; i < this.racers.length; i++) {
       const r = this.racers[i];
+      if (this.session === 'rogue' && i > 0) {
+        r.boat.root.visible = false;
+        r.rider.root.visible = false;
+        continue;
+      }
       this.racerSphere.center.copy(r.physics.position);
       const inView = this.frustum.intersectsSphere(this.racerSphere);
       r.boat.root.visible = inView;
@@ -646,7 +985,7 @@ export class Game {
   private riderLodDist = 80;
   private hudCourse: HudCourse | null = null;
   private readonly curvatureAhead = new Float32Array(24);
-  private readonly hudData: HudData = { phase: 'intro', player: null };
+  private readonly hudData: HudData = { phase: 'intro', player: null, rogue: null };
   private readonly screensData: ScreensData = { phase: 'intro' };
   private readonly corner: HudCorner = { severity: 0, direction: 0 };
 
@@ -707,26 +1046,41 @@ export class Game {
   private updateUi(ctx: { dt: number; elapsed: number; frame: number }): void {
     const director = this.director;
     const p = this.player;
-    if (!this.hud || !this.screens || !director) return;
+    if (!this.hud || !this.screens) return;
 
-    const phase = this.userPaused ? director.phase : director.phase;
-    const playerProgress = director.get(0);
+    const circuit = this.session === 'circuit';
+    const rogue = this.session === 'rogue' ? this.rogue : null;
+    const rogueRacing = rogue?.phase === 'racing';
+    const phase =
+      this.session === 'title'
+        ? 'intro'
+        : circuit
+          ? (director?.phase ?? 'intro')
+          : rogueRacing
+            ? 'racing'
+            : 'intro';
+    const playerProgress = circuit ? director?.get(0) : null;
 
     this.states.length = 0;
-    for (const r of this.racers) this.states.push(r.physics);
+    if (this.session === 'rogue') {
+      if (p) this.states.push(p.physics);
+    } else {
+      for (const r of this.racers) this.states.push(r.physics);
+    }
 
     const d = this.hudData;
     d.phase = phase;
     d.player = p ? p.physics : null;
     d.boats = this.states;
-    d.progress = director.progress;
+    d.progress = circuit ? director?.progress : undefined;
     d.playerProgress = playerProgress;
-    d.totalLaps = director.laps;
-    d.countdown = director.countdownValue;
-    d.wrongWay = playerProgress?.wrongWay ?? false;
-    d.course = this.hudCourse;
-    d.corner = this.cornerAhead();
+    d.totalLaps = director?.laps;
+    d.countdown = circuit ? director?.countdownValue : undefined;
+    d.wrongWay = circuit ? (playerProgress?.wrongWay ?? false) : false;
+    d.course = circuit ? this.hudCourse : null;
+    d.corner = circuit ? this.cornerAhead() : null;
     d.paused = this.userPaused;
+    d.rogue = rogueRacing && rogue ? this.toHudRogue(rogue) : null;
     d.perf = this.showPerf
       ? {
           fps: this.engine.fps,
@@ -741,12 +1095,70 @@ export class Game {
     const s = this.screensData;
     s.phase = phase;
     s.paused = this.userPaused;
-    s.totalLaps = director.laps;
-    if (phase === 'results' || phase === 'finished') {
+    s.totalLaps = director?.laps;
+    s.mode = this.session === 'title' ? undefined : this.session;
+    s.titleIndex = this.titleIndex;
+    s.shop = undefined;
+    s.run = undefined;
+    if (circuit && (phase === 'results' || phase === 'finished')) {
       s.results = this.buildResults();
       s.playerPosition = playerProgress?.finishPosition || undefined;
+    } else {
+      s.results = undefined;
+      s.playerPosition = undefined;
+    }
+    if (rogue?.phase === 'upgrade') {
+      const last = rogue.records[rogue.records.length - 1];
+      s.shop = {
+        stageCleared: rogue.stage + 1,
+        points: rogue.runPoints,
+        formula: timeFormulaLabel(),
+        lastPoints: last?.points ?? 0,
+        lastTime: last?.time ?? 0,
+        lastPar: last?.par ?? 0,
+        catalog: ROGUE_CATALOG.map((u) => ({
+          id: u.id,
+          name: u.name,
+          blurb: u.blurb,
+          cost: u.cost,
+          owned: rogue.owned.has(u.id),
+          affordable: rogue.runPoints >= u.cost && !rogue.owned.has(u.id),
+        })),
+        highlight: this.shopHighlight,
+      };
+    }
+    if (rogue?.phase === 'runResults') {
+      s.run = {
+        name: ROGUE_RUN_NAME,
+        verdict: rogue.verdict(),
+        totalTime: rogue.records.reduce((a, r) => a + r.time, 0),
+        leftover: rogue.runPoints,
+        orbs: rogue.records.reduce((a, r) => a + r.orbs, 0),
+        stages: rogue.records.map((r) => ({
+          stage: r.stage,
+          time: r.time,
+          par: r.par,
+          timePoints: r.timePoints,
+          orbs: r.orbs,
+          points: r.points,
+        })),
+        highlight: this.shopHighlight,
+      };
     }
     this.screens.update(s, ctx);
+  }
+
+  private toHudRogue(rogue: RogueDirector): HudRogue {
+    const snap = rogue.hud();
+    return {
+      stage: snap.stage,
+      stageCount: snap.stageCount,
+      remaining: snap.remaining,
+      stageTime: snap.stageTime,
+      pointsThisStage: snap.pointsThisStage,
+      runPoints: snap.runPoints,
+      par: snap.par,
+    };
   }
 
   /**
@@ -813,8 +1225,16 @@ export class Game {
 
   private respawnPlayer(elapsed: number): void {
     const p = this.player;
+    if (!p) return;
+    if (this.session === 'rogue') {
+      const x = ROGUE_ORIGIN_X;
+      const z = p.physics.position.z;
+      p.physics.respawn(new Vector3(x, 0, z), 0, elapsed);
+      this.snapCameraToPlayer();
+      return;
+    }
     const course = this.course;
-    if (!p || !course) return;
+    if (!course) return;
     // Put the player back on the racing line facing the right way, which is the
     // only respawn that is never a punishment.
     const point = course.sample(Course.wrap(this.lastPlayerT), elapsed);
@@ -1026,7 +1446,18 @@ export class Game {
 
     /** Race state, so a shot can assert it reached the moment it asked for. */
     raceState: () => ({
-      phase: this.director?.phase ?? 'intro',
+      phase:
+        this.session === 'title'
+          ? 'intro'
+          : this.session === 'rogue'
+            ? this.rogue?.phase === 'racing'
+              ? 'racing'
+              : this.rogue?.phase === 'runResults'
+                ? 'results'
+                : 'intro'
+            : (this.director?.phase ?? 'intro'),
+      mode: this.session,
+      specTopSpeed: this.player?.physics.spec.topSpeed ?? 0,
       countdown: this.director?.countdownValue ?? 0,
       standings: (this.director?.standings() ?? []).map((p) => ({
         boat: BOAT_SPECS[p.boatId].name,
@@ -1036,6 +1467,15 @@ export class Game {
         finishPosition: p.finishPosition,
         totalTime: Number(p.totalTime.toFixed(2)),
       })),
+      rogue: this.rogue
+        ? {
+            phase: this.rogue.phase,
+            stage: this.rogue.stage + 1,
+            distance: Number(this.rogue.distance.toFixed(1)),
+            points: this.rogue.runPoints,
+            specTopSpeed: this.rogue.spec.topSpeed,
+          }
+        : null,
     }),
 
     setQuality: (tier: QualityTier): void => {

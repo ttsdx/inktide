@@ -114,6 +114,21 @@ export interface HudData {
   paused?: boolean;
   /** Live frame budget. Only set when the game is started with `?perf=1`. */
   perf?: HudPerf | null;
+  /**
+   * Rogue in-run readout. When set, the circuit POS/LAP/splits/minimap/wrong-way
+   * cluster is replaced so the circuit HUD does not grow rogue widgets.
+   */
+  rogue?: HudRogue | null;
+}
+
+export interface HudRogue {
+  stage: number;
+  stageCount: number;
+  remaining: number;
+  stageTime: number;
+  pointsThisStage: number;
+  runPoints: number;
+  par: number;
 }
 
 export interface HudPerf {
@@ -278,8 +293,15 @@ export class Hud {
     const pp = resolveProgress(data);
 
     const visible =
-      data.phase === 'countdown' || data.phase === 'racing' || data.phase === 'finished';
-    this.entrySpring.step(visible ? 1 : 0, dt);
+      data.phase === 'countdown' ||
+      data.phase === 'racing' ||
+      data.phase === 'finished' ||
+      Boolean(data.rogue);
+    // Snap off on title / jet shop so the circuit POS/LAP cluster cannot
+    // fade in over those overlays for the spring's decay. Results still ease.
+    if (visible) this.entrySpring.step(1, dt);
+    else if (data.phase === 'intro') this.entrySpring.snap(0);
+    else this.entrySpring.step(0, dt);
 
     this.speedSpring.step(player ? Math.max(0, player.speed) : 0, dt);
     // Boost charge is smoothed only lightly — it is a resource the player is
@@ -375,13 +397,16 @@ export class Hud {
     // assembles outwards instead of everything arriving from one direction.
     c.save();
     c.translate(-slide * 380 * u, 0);
-    this.drawLeftCluster(c, data, m);
+    if (data.rogue) this.drawRogueCluster(c, data.rogue, m);
+    else this.drawLeftCluster(c, data, m);
     c.restore();
 
-    c.save();
-    c.translate(slide * 380 * u, 0);
-    this.drawMinimap(c, data, m);
-    c.restore();
+    if (!data.rogue) {
+      c.save();
+      c.translate(slide * 380 * u, 0);
+      this.drawMinimap(c, data, m);
+      c.restore();
+    }
 
     c.save();
     c.translate(slide * 260 * u, slide * 200 * u);
@@ -393,10 +418,12 @@ export class Hud {
     this.drawBoost(c, data, m);
     c.restore();
 
-    c.save();
-    c.translate(-slide * 480 * u, 0);
-    this.drawDelta(c, m);
-    c.restore();
+    if (!data.rogue) {
+      c.save();
+      c.translate(-slide * 480 * u, 0);
+      this.drawDelta(c, m);
+      c.restore();
+    }
   }
 
   private drawLeftCluster(c: Ctx2D, data: HudData, m: number): void {
@@ -558,6 +585,87 @@ export class Hud {
       });
       ry += size + 14 * u;
     }
+  }
+
+  /**
+   * Rogue left cluster: stage, remaining metres, stage time, points.
+   * Speedo and boost stay where they are; this is the only new chrome.
+   */
+  private drawRogueCluster(c: Ctx2D, rogue: HudRogue, m: number): void {
+    const u = this.u;
+    const pw = 248 * u;
+    const ph = 118 * u;
+    panel(c, m, 22 * u, pw, ph, {
+      fill: CSS.ink,
+      alpha: 0.86,
+      slant: 12 * u,
+      cut: 18 * u,
+      shadow: 5 * u,
+      line: 3 * u,
+      stripe: CSS.amber,
+      stripeWidth: 8 * u,
+    });
+    drawText(c, 'STAGE', m + 22 * u, 36 * u, {
+      size: 14 * u,
+      fill: CSS.cyan,
+      weight: 0.22,
+      outline: 0.12,
+      tracking: 3.0,
+    });
+    drawText(c, `${rogue.stage}/${rogue.stageCount}`, m + pw - 18 * u, 30 * u, {
+      size: 32 * u,
+      fill: CSS.foam,
+      align: 'right',
+      weight: 0.2,
+      outline: 0.11,
+      shadow: 2.5 * u,
+    });
+    drawText(c, `${Math.max(0, Math.round(rogue.remaining))} M`, m + 22 * u, 78 * u, {
+      size: 28 * u,
+      fill: CSS.amber,
+      weight: 0.2,
+      outline: 0.11,
+      shadow: 2 * u,
+    });
+
+    const ly = (22 + 118 + 10) * u;
+    panel(c, m, ly, 248 * u, 92 * u, {
+      fill: CSS.ink,
+      alpha: 0.82,
+      slant: 8 * u,
+      cut: 14 * u,
+      shadow: 4 * u,
+      line: 2.5 * u,
+    });
+    drawText(c, 'TIME', m + 16 * u, ly + 14 * u, {
+      size: 13 * u,
+      fill: CSS.cyan,
+      weight: 0.22,
+      outline: 0.12,
+      tracking: 2.8,
+    });
+    drawText(c, formatTime(rogue.stageTime), m + 232 * u, ly + 10 * u, {
+      size: 24 * u,
+      fill: CSS.foam,
+      align: 'right',
+      weight: 0.19,
+      outline: 0.11,
+    });
+    drawText(c, 'PTS', m + 16 * u, ly + 52 * u, {
+      size: 13 * u,
+      fill: CSS.cyan,
+      weight: 0.22,
+      outline: 0.12,
+      tracking: 2.8,
+    });
+    drawText(c, `${rogue.pointsThisStage}`, m + 232 * u, ly + 46 * u, {
+      size: 24 * u,
+      fill: CSS.green,
+      align: 'right',
+      weight: 0.19,
+      outline: 0.11,
+    });
+    void ph;
   }
 
   private drawDelta(c: Ctx2D, m: number): void {
@@ -898,8 +1006,10 @@ export class Hud {
 
   private drawCentre(c: Ctx2D, data: HudData): void {
     this.drawCountdown(c, data);
-    this.drawWrongWay(c, data);
-    this.drawCornerPreview(c, data);
+    if (!data.rogue) {
+      this.drawWrongWay(c, data);
+      this.drawCornerPreview(c, data);
+    }
   }
 
   private drawCountdown(c: Ctx2D, data: HudData): void {

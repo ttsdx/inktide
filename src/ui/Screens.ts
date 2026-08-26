@@ -1,4 +1,4 @@
-import type { FrameContext, RacePhase } from '../contracts.ts';
+import type { FrameContext, GameMode, RacePhase } from '../contracts.ts';
 import { CSS } from '../core/Palette.ts';
 import { drawText, formatTime, measureText, ordinalSuffix, racerColor } from './hudPrimitives.ts';
 
@@ -41,6 +41,24 @@ export interface ScreenResultRow {
   finished?: boolean;
 }
 
+export interface ScreenUpgradeRow {
+  id: string;
+  name: string;
+  blurb: string;
+  cost: number;
+  owned: boolean;
+  affordable: boolean;
+}
+
+export interface ScreenRunStage {
+  stage: number;
+  time: number;
+  par: number;
+  timePoints: number;
+  orbs: number;
+  points: number;
+}
+
 export interface ScreensData {
   phase: RacePhase;
   paused?: boolean;
@@ -53,9 +71,34 @@ export interface ScreensData {
   startHint?: string;
   /** Replaces the pause overlay's hint line. */
   pauseHint?: string;
+  /** Which play mode the session is in. Title ignores this. */
+  mode?: GameMode;
+  /** Highlighted title option: 0 circuit, 1 rogue. */
+  titleIndex?: number;
+  /** Between-stage shop. */
+  shop?: {
+    stageCleared: number;
+    points: number;
+    formula: string;
+    lastPoints: number;
+    lastTime: number;
+    lastPar: number;
+    catalog: readonly ScreenUpgradeRow[];
+    highlight: number;
+  };
+  /** End-of-run recap. */
+  run?: {
+    name: string;
+    verdict: string;
+    totalTime: number;
+    leftover: number;
+    orbs: number;
+    stages: readonly ScreenRunStage[];
+    highlight: number;
+  };
 }
 
-type ScreenKind = 'none' | 'title' | 'pause' | 'results';
+type ScreenKind = 'none' | 'title' | 'pause' | 'results' | 'upgrade' | 'runResults';
 
 const STYLE_ID = 'ink-tide-screens-style';
 
@@ -119,7 +162,7 @@ const SHEET = `
   transform-origin: right center; animation-delay: 90ms;
 }
 
-.it-headline { display: block; }
+.it-headline { display: block; flex: 0 0 auto; width: auto; height: auto; max-width: 100%; }
 .it-headline.it-pop { animation: it-pop 420ms cubic-bezier(.16,1.5,.3,1) both; }
 
 .it-rule {
@@ -203,6 +246,53 @@ const SHEET = `
 .it-btn:hover { background: ${CSS.foam}; transform: skewX(-10deg) translate(-2px, -2px); box-shadow: 9px 9px 0 ${CSS.ink}; }
 .it-btn:active { transform: skewX(-10deg) translate(3px, 3px); box-shadow: 2px 2px 0 ${CSS.ink}; }
 .it-btn.it-alt { background: ${CSS.amber}; }
+.it-btn.it-sel { background: ${CSS.foam}; box-shadow: 9px 9px 0 ${CSS.ink}; }
+.it-btn.it-ghost { background: ${CSS.inkSoft}; color: ${CSS.foam}; }
+.it-modes { display: flex; gap: 16px; align-items: stretch; margin-top: 8px; }
+.it-mode {
+  pointer-events: auto; cursor: pointer; appearance: none;
+  min-width: 220px; text-align: left;
+  font: inherit; color: ${CSS.foam};
+  background: rgba(10,18,38,0.92); border: 3px solid ${CSS.ink};
+  padding: 18px 22px 16px;
+  clip-path: polygon(16px 0, 100% 0, 100% calc(100% - 16px), calc(100% - 16px) 100%, 0 100%, 0 16px);
+  box-shadow: 7px 7px 0 ${CSS.ink};
+  transform: skewX(-8deg);
+}
+.it-mode.it-sel { background: ${CSS.cyan}; color: ${CSS.ink}; }
+.it-mode-name { font-size: 22px; letter-spacing: 0.28em; }
+.it-mode-blurb { margin-top: 8px; font-size: 12px; letter-spacing: 0.18em; opacity: 0.85; }
+.it-shop {
+  padding: 22px 26px 20px; min-width: min(860px, 94vw);
+  background: rgba(10,18,38,0.95); border-color: ${CSS.inkSoft};
+  animation: it-rise 380ms cubic-bezier(.2,.9,.2,1) both;
+}
+.it-shop::before {
+  content: ''; position: absolute; left: 0; top: 26px; width: 8px; height: 78px;
+  background: ${CSS.amber};
+}
+.it-shop-meta {
+  display: flex; gap: 18px; flex-wrap: wrap; margin: 6px 0 14px;
+  font-size: 13px; letter-spacing: 0.16em; color: ${CSS.cyan};
+}
+.it-catalog {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+}
+.it-card {
+  pointer-events: auto; cursor: pointer; appearance: none;
+  text-align: left; font: inherit; color: ${CSS.foam};
+  background: rgba(22,41,74,0.85); border: 3px solid ${CSS.ink};
+  padding: 12px 14px 10px;
+  clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
+}
+.it-card.it-sel { border-color: ${CSS.cyan}; background: rgba(143,244,255,0.18); }
+.it-card.it-owned { opacity: 0.45; cursor: default; }
+.it-card.it-poor { opacity: 0.55; }
+.it-card-name { font-size: 15px; letter-spacing: 0.2em; color: ${CSS.amber}; }
+.it-card-blurb { margin-top: 6px; font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; }
+.it-card-cost { margin-top: 8px; font-size: 13px; letter-spacing: 0.18em; color: ${CSS.cyan}; }
+.it-run-grid { display: grid; grid-template-columns: 70px 1fr 110px 90px 90px; row-gap: 6px; }
 /* Also a vector caption; the slant is already baked into the glyphs. */
 .it-hint { opacity: 0.85; }
 
@@ -268,10 +358,17 @@ function headlineCanvas(
 export class Screens {
   /** Hooked by the game to rebuild the race. Fired by the results button. */
   onRestart: (() => void) | null = null;
-  /** Fired by the title card's start button. */
+  /** Fired by the title card's start button. Kept so old callers still compile. */
   onStart: (() => void) | null = null;
+  onStartCircuit: (() => void) | null = null;
+  onStartRogue: (() => void) | null = null;
   /** Fired by the pause overlay's resume button. */
   onResume: (() => void) | null = null;
+  onQuitToTitle: (() => void) | null = null;
+  onBuyUpgrade: ((id: string) => void) | null = null;
+  onContinueRun: (() => void) | null = null;
+  onTitleIndex: ((index: number) => void) | null = null;
+  onShopHighlight: ((index: number) => void) | null = null;
 
   private readonly container: HTMLElement;
   private readonly root: HTMLDivElement;
@@ -279,7 +376,17 @@ export class Screens {
   private current: ScreenKind = 'none';
   /** Signature of the rendered results, so the table is not rebuilt every frame. */
   private resultsKey = '';
+  private titleKey = '';
+  private shopKey = '';
+  private runKey = '';
+  private pauseKey = '';
   private disposed = false;
+  private titleIndex = 0;
+  private shopHighlight = 0;
+  private pauseHighlight = 0;
+  private resultsHighlight = 0;
+  private runHighlight = 0;
+  private lastData: ScreensData | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -293,49 +400,181 @@ export class Screens {
       title: this.buildTitle(),
       pause: this.buildPause(),
       results: this.buildResults(),
+      upgrade: this.buildUpgrade(),
+      runResults: this.buildRunResults(),
     };
     for (const el of Object.values(this.screens)) this.root.appendChild(el);
   }
 
   /**
-   * Drive the screens from race state.
+   * Drive the screens from session state.
    *
    * Cheap to call every frame: it resolves which screen should be up, and only
-   * touches the DOM when that answer or the results data actually changes. The
-   * entrance animations are CSS, so re-showing a screen is one class toggle.
+   * touches the DOM when that answer or the payload actually changes.
    */
   update(data: ScreensData, ctx: FrameContext): void {
     if (this.disposed) return;
     void ctx;
+    this.lastData = data;
 
     let want: ScreenKind = 'none';
-    if (data.phase === 'results') want = 'results';
+    if (data.shop) want = 'upgrade';
+    else if (data.run) want = 'runResults';
+    else if (data.phase === 'results') want = 'results';
     else if (data.paused === true) want = 'pause';
     else if (data.phase === 'intro') want = 'title';
 
+    if (want === 'title') {
+      const idx = data.titleIndex ?? this.titleIndex;
+      const key = `${idx}`;
+      if (key !== this.titleKey) {
+        this.titleKey = key;
+        this.titleIndex = idx;
+        this.paintTitle();
+      }
+    }
+
+    if (want === 'pause') {
+      const key = `${this.pauseHighlight}|${data.mode ?? ''}|${data.pauseHint ?? ''}`;
+      if (key !== this.pauseKey) {
+        this.pauseKey = key;
+        this.paintPause(data);
+      }
+    }
+
     if (want === 'results') {
       const rows = sortRows(data.results ?? []);
-      const key = resultsSignature(rows, data.playerPosition);
+      const key = resultsSignature(rows, data.playerPosition) + `|${this.resultsHighlight}`;
       if (key !== this.resultsKey) {
         this.resultsKey = key;
         this.fillResults(rows, data);
       }
     }
 
+    if (want === 'upgrade' && data.shop) {
+      const key = shopSignature(data.shop) + `|${data.shop.highlight}`;
+      if (key !== this.shopKey) {
+        this.shopKey = key;
+        this.shopHighlight = data.shop.highlight;
+        this.fillShop(data.shop);
+      }
+    }
+
+    if (want === 'runResults' && data.run) {
+      const key = runSignature(data.run) + `|${data.run.highlight}`;
+      if (key !== this.runKey) {
+        this.runKey = key;
+        this.runHighlight = data.run.highlight;
+        this.fillRun(data.run);
+      }
+    }
+
     if (want !== this.current) {
       for (const [kind, el] of Object.entries(this.screens)) {
         const on = kind === want;
-        // Re-adding the class after a removal restarts the CSS entrance
-        // animations, which is exactly what a re-shown screen should do.
         el.classList.toggle('it-on', on);
       }
       this.current = want;
+      this.titleKey = '';
+      this.pauseKey = '';
+      this.resultsKey = '';
+      this.shopKey = '';
+      this.runKey = '';
+      if (want === 'title') this.paintTitle();
+      if (want === 'pause' && this.lastData) this.paintPause(this.lastData);
     }
   }
 
-  /** True while a screen is up — the game can use this to gate input. */
+  /** Keyboard / gamepad highlight and confirm. Ignored while no overlay is up. */
+  handleMenu(delta: number, confirm: boolean): boolean {
+    if (this.current === 'none') return false;
+    if (delta === 0 && !confirm) return false;
+
+    if (this.current === 'title') {
+      if (delta !== 0) {
+        this.titleIndex = this.titleIndex === 0 ? 1 : 0;
+        this.onTitleIndex?.(this.titleIndex);
+        this.paintTitle();
+        return true;
+      }
+      if (confirm) {
+        this.launchTitle();
+        return true;
+      }
+    }
+
+    if (this.current === 'pause') {
+      const n = 3;
+      if (delta !== 0) {
+        this.pauseHighlight = (this.pauseHighlight + (delta > 0 ? 1 : n - 1)) % n;
+        this.pauseKey = '';
+        if (this.lastData) this.paintPause(this.lastData);
+        return true;
+      }
+      if (confirm) {
+        if (this.pauseHighlight === 0) this.onResume?.();
+        else if (this.pauseHighlight === 1) this.onRestart?.();
+        else this.onQuitToTitle?.();
+        return true;
+      }
+    }
+
+    if (this.current === 'results') {
+      if (delta !== 0) {
+        this.resultsHighlight = this.resultsHighlight === 0 ? 1 : 0;
+        this.resultsKey = '';
+        if (this.lastData) this.fillResults(sortRows(this.lastData.results ?? []), this.lastData);
+        return true;
+      }
+      if (confirm) {
+        if (this.resultsHighlight === 0) this.onRestart?.();
+        else this.onQuitToTitle?.();
+        return true;
+      }
+    }
+
+    if (this.current === 'upgrade') {
+      const shop = this.lastData?.shop;
+      if (!shop) return false;
+      const n = shop.catalog.length + 1;
+      if (delta !== 0) {
+        this.shopHighlight = (this.shopHighlight + (delta > 0 ? 1 : n - 1) + n) % n;
+        this.onShopHighlight?.(this.shopHighlight);
+        return true;
+      }
+      if (confirm) {
+        if (this.shopHighlight >= shop.catalog.length) this.onContinueRun?.();
+        else {
+          const item = shop.catalog[this.shopHighlight];
+          if (item) this.onBuyUpgrade?.(item.id);
+        }
+        return true;
+      }
+    }
+
+    if (this.current === 'runResults') {
+      if (delta !== 0) {
+        this.runHighlight = this.runHighlight === 0 ? 1 : 0;
+        this.onShopHighlight?.(this.runHighlight);
+        this.runKey = '';
+        if (this.lastData?.run) this.fillRun({ ...this.lastData.run, highlight: this.runHighlight });
+        return true;
+      }
+      if (confirm) {
+        if (this.runHighlight === 0) this.onRestart?.();
+        else this.onQuitToTitle?.();
+        return true;
+      }
+    }
+    return false;
+  }
+
   get visible(): boolean {
     return this.current !== 'none';
+  }
+
+  get kind(): ScreenKind {
+    return this.current;
   }
 
   dispose(): void {
@@ -348,9 +587,18 @@ export class Screens {
   // Construction
   // -------------------------------------------------------------------------
 
+  private launchTitle(): void {
+    if (this.titleIndex === 0) {
+      if (this.onStartCircuit) this.onStartCircuit();
+      else this.onStart?.();
+    } else {
+      this.onStartRogue?.();
+    }
+  }
+
   private buildTitle(): HTMLDivElement {
     const screen = div('it-screen');
-    screen.appendChild(div('it-wash'));
+    screen.appendChild(div('it-wash it-light'));
     const stack = div('it-stack');
     const slabs = div('it-slabs');
     slabs.appendChild(div('it-slab it-slab-a'));
@@ -362,13 +610,48 @@ export class Screens {
     stack.appendChild(div('it-rule'));
     stack.appendChild(caption('it-sub', 'CEL-SHADED OCEAN RACING', 15, CSS.cyan));
 
-    const actions = div('it-actions');
-    const start = button('it-btn', 'START RACE', () => this.onStart?.());
-    actions.appendChild(start);
-    stack.appendChild(actions);
-    stack.appendChild(caption('it-prompt', 'PRESS ENTER OR CLICK TO LAUNCH', 14, CSS.foam));
+    const modes = div('it-modes');
+    modes.appendChild(this.modeButton(0, 'CIRCUIT', '3 LAPS  ·  FOUR BOATS'));
+    modes.appendChild(this.modeButton(1, 'ROGUE', 'THE WASH  ·  THREE STAGES'));
+    stack.appendChild(modes);
+    stack.appendChild(caption('it-prompt', 'SELECT A MODE  ·  ENTER TO LAUNCH', 14, CSS.foam));
     screen.appendChild(stack);
     return screen;
+  }
+
+  private modeButton(index: number, name: string, blurb: string): HTMLButtonElement {
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.className = 'it-mode';
+    el.dataset.index = String(index);
+    const n = document.createElement('div');
+    n.className = 'it-mode-name';
+    n.textContent = name;
+    const b = document.createElement('div');
+    b.className = 'it-mode-blurb';
+    b.textContent = blurb;
+    el.appendChild(n);
+    el.appendChild(b);
+    el.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.titleIndex = index;
+      this.onTitleIndex?.(index);
+      this.launchTitle();
+    });
+    el.addEventListener('pointerenter', () => {
+      if (this.titleIndex !== index) {
+        this.titleIndex = index;
+        this.onTitleIndex?.(index);
+        this.paintTitle();
+      }
+    });
+    return el;
+  }
+
+  private paintTitle(): void {
+    const modes = this.screens.title.querySelectorAll('.it-mode');
+    modes.forEach((el, i) => el.classList.toggle('it-sel', i === this.titleIndex));
   }
 
   private buildPause(): HTMLDivElement {
@@ -379,13 +662,27 @@ export class Screens {
     head.classList.add('it-pop');
     stack.appendChild(head);
     stack.appendChild(div('it-rule'));
-    const actions = div('it-actions');
-    actions.appendChild(button('it-btn', 'RESUME', () => this.onResume?.()));
-    actions.appendChild(button('it-btn it-alt', 'RESTART', () => this.onRestart?.()));
+    const actions = div('it-actions it-pause-actions');
     stack.appendChild(actions);
     stack.appendChild(caption('it-hint', 'ESC TO RESUME', 13, CSS.cyan));
     screen.appendChild(stack);
     return screen;
+  }
+
+  private paintPause(data: ScreensData): void {
+    const actions = this.screens.pause.querySelector('.it-pause-actions');
+    if (!actions) return;
+    actions.textContent = '';
+    const restartLabel = data.mode === 'rogue' ? 'RESTART STAGE' : 'RESTART';
+    const labels: Array<[string, string, () => void]> = [
+      ['it-btn', 'RESUME', () => this.onResume?.()],
+      ['it-btn it-alt', restartLabel, () => this.onRestart?.()],
+      ['it-btn it-ghost', 'QUIT TO TITLE', () => this.onQuitToTitle?.()],
+    ];
+    labels.forEach(([cls, label, fn], i) => {
+      const b = button(cls + (i === this.pauseHighlight ? ' it-sel' : ''), label, fn);
+      actions.appendChild(b);
+    });
   }
 
   private buildResults(): HTMLDivElement {
@@ -396,9 +693,7 @@ export class Screens {
     panel.appendChild(div('it-results-head'));
     panel.appendChild(div('it-verdict'));
     panel.appendChild(div('it-grid'));
-    const actions = div('it-actions');
-    actions.appendChild(button('it-btn', 'RACE AGAIN', () => this.onRestart?.()));
-    actions.appendChild(caption('it-hint', 'ENTER TO RESTART', 13, CSS.cyan));
+    const actions = div('it-actions it-results-actions');
     panel.appendChild(actions);
     stack.appendChild(panel);
     screen.appendChild(stack);
@@ -411,13 +706,12 @@ export class Screens {
     const head = panel.querySelector('.it-results-head');
     const verdict = panel.querySelector('.it-verdict');
     const grid = panel.querySelector('.it-grid');
+    const actions = panel.querySelector('.it-results-actions');
     if (!head || !verdict || !grid) return;
 
     head.textContent = '';
     head.appendChild(headlineCanvas('RESULTS', 46, CSS.foam, { shadow: 5 }));
 
-    // The player's own placement is the single most important number on this
-    // screen, so it gets the headline treatment and its own colour.
     const player = rows.find((r) => r.isPlayer === true);
     const place = data.playerPosition ?? player?.position ?? 0;
     verdict.textContent = '';
@@ -454,8 +748,6 @@ export class Screens {
       const tr = div('it-row');
       if (row.isPlayer) tr.classList.add('it-player');
       if (row.finished === false) tr.classList.add('it-dnf');
-      // Staggered entrance: the classification arrives in finishing order, which
-      // is worth the four inline delays.
       tr.style.animationDelay = `${120 + i * 70}ms`;
 
       const pos = div('it-cell');
@@ -485,7 +777,183 @@ export class Screens {
       grid.appendChild(tr);
       i++;
     }
+
+    if (actions) {
+      actions.textContent = '';
+      actions.appendChild(
+        button(
+          'it-btn' + (this.resultsHighlight === 0 ? ' it-sel' : ''),
+          'RACE AGAIN',
+          () => this.onRestart?.(),
+        ),
+      );
+      actions.appendChild(
+        button(
+          'it-btn it-ghost' + (this.resultsHighlight === 1 ? ' it-sel' : ''),
+          'QUIT TO TITLE',
+          () => this.onQuitToTitle?.(),
+        ),
+      );
+      actions.appendChild(caption('it-hint', 'ENTER TO CONFIRM', 13, CSS.cyan));
+    }
   }
+
+  private buildUpgrade(): HTMLDivElement {
+    const screen = div('it-screen');
+    screen.appendChild(div('it-wash'));
+    const stack = div('it-stack');
+    const panel = div('it-panel it-shop');
+    panel.appendChild(div('it-shop-head'));
+    panel.appendChild(div('it-shop-meta'));
+    panel.appendChild(div('it-catalog'));
+    const actions = div('it-actions it-shop-actions');
+    panel.appendChild(actions);
+    stack.appendChild(panel);
+    screen.appendChild(stack);
+    return screen;
+  }
+
+  private fillShop(shop: NonNullable<ScreensData['shop']>): void {
+    const panel = this.screens.upgrade.querySelector('.it-shop');
+    if (!panel) return;
+    const head = panel.querySelector('.it-shop-head');
+    const meta = panel.querySelector('.it-shop-meta');
+    const catalog = panel.querySelector('.it-catalog');
+    const actions = panel.querySelector('.it-shop-actions');
+    if (!head || !meta || !catalog || !actions) return;
+
+    head.textContent = '';
+    head.appendChild(headlineCanvas('JET SHOP', 44, CSS.foam, { shadow: 5 }));
+
+    meta.textContent = '';
+    meta.appendChild(span('', `STAGE ${shop.stageCleared} CLEAR`));
+    meta.appendChild(span('', `TIME ${formatTime(shop.lastTime)}  PAR ${formatTime(shop.lastPar)}`));
+    meta.appendChild(span('', `+${shop.lastPoints} PTS`));
+    meta.appendChild(span('', `BANK ${shop.points}`));
+    const formula = div('it-shop-formula');
+    formula.style.cssText = 'flex-basis:100%;opacity:.75;font-size:11px;letter-spacing:.12em';
+    formula.textContent = shop.formula + `   ·   ORB +2`;
+    meta.appendChild(formula);
+
+    catalog.textContent = '';
+    shop.catalog.forEach((item, i) => {
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'it-card';
+      if (i === shop.highlight) card.classList.add('it-sel');
+      if (item.owned) card.classList.add('it-owned');
+      else if (!item.affordable) card.classList.add('it-poor');
+      const name = div('it-card-name');
+      name.textContent = item.name;
+      const blurb = div('it-card-blurb');
+      blurb.textContent = item.blurb;
+      const cost = div('it-card-cost');
+      cost.textContent = item.owned ? 'FITTED' : `${item.cost} PTS`;
+      card.appendChild(name);
+      card.appendChild(blurb);
+      card.appendChild(cost);
+      card.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        this.onShopHighlight?.(i);
+        this.onBuyUpgrade?.(item.id);
+      });
+      catalog.appendChild(card);
+    });
+
+    actions.textContent = '';
+    const cont = button(
+      'it-btn' + (shop.highlight >= shop.catalog.length ? ' it-sel' : ''),
+      'CONTINUE',
+      () => this.onContinueRun?.(),
+    );
+    actions.appendChild(cont);
+    actions.appendChild(caption('it-hint', 'ENTER BUYS  ·  CONTINUE FREES THE NEXT STAGE', 12, CSS.cyan));
+  }
+
+  private buildRunResults(): HTMLDivElement {
+    const screen = div('it-screen');
+    screen.appendChild(div('it-wash'));
+    const stack = div('it-stack');
+    const panel = div('it-panel it-results');
+    panel.appendChild(div('it-run-head'));
+    panel.appendChild(div('it-verdict'));
+    panel.appendChild(div('it-run-grid'));
+    const actions = div('it-actions it-run-actions');
+    panel.appendChild(actions);
+    stack.appendChild(panel);
+    screen.appendChild(stack);
+    return screen;
+  }
+
+  private fillRun(run: NonNullable<ScreensData['run']>): void {
+    const panel = this.screens.runResults.querySelector('.it-results');
+    if (!panel) return;
+    const head = panel.querySelector('.it-run-head');
+    const verdict = panel.querySelector('.it-verdict');
+    const grid = panel.querySelector('.it-run-grid');
+    const actions = panel.querySelector('.it-run-actions');
+    if (!head || !verdict || !grid || !actions) return;
+
+    head.textContent = '';
+    head.appendChild(headlineCanvas(run.name, 42, CSS.foam, { shadow: 5 }));
+
+    verdict.textContent = '';
+    verdict.appendChild(headlineCanvas(run.verdict, 36, CSS.amber, { shadow: 5 }));
+    verdict.appendChild(
+      caption('it-verdict-note', `TOTAL ${formatTime(run.totalTime)}  ·  BANK ${run.leftover}`, 14, CSS.cyan),
+    );
+
+    grid.textContent = '';
+    for (const label of ['STG', 'TIME', 'PAR', 'ORBS', 'PTS']) {
+      const th = div(label === 'STG' ? 'it-th' : 'it-th it-num');
+      th.textContent = label;
+      grid.appendChild(th);
+    }
+    for (const st of run.stages) {
+      const tr = div('it-row');
+      tr.appendChild(cellLeft(`${st.stage + 1}`));
+      tr.appendChild(cell(formatTime(st.time)));
+      tr.appendChild(cell(formatTime(st.par)));
+      tr.appendChild(cell(`${st.orbs}`));
+      tr.appendChild(cell(`${st.points}`));
+      grid.appendChild(tr);
+    }
+
+    actions.textContent = '';
+    actions.appendChild(
+      button(
+        'it-btn' + (run.highlight === 0 ? ' it-sel' : ''),
+        'RUN AGAIN',
+        () => this.onRestart?.(),
+      ),
+    );
+    actions.appendChild(
+      button(
+        'it-btn it-ghost' + (run.highlight === 1 ? ' it-sel' : ''),
+        'QUIT TO TITLE',
+        () => this.onQuitToTitle?.(),
+      ),
+    );
+  }
+}
+
+function cellLeft(content: string): HTMLDivElement {
+  const el = div('it-cell');
+  el.textContent = content;
+  return el;
+}
+
+function shopSignature(shop: NonNullable<ScreensData['shop']>): string {
+  let s = `${shop.points}|${shop.lastPoints}|${shop.highlight}|`;
+  for (const c of shop.catalog) s += `${c.id}:${c.owned ? 1 : 0}:${c.affordable ? 1 : 0};`;
+  return s;
+}
+
+function runSignature(run: NonNullable<ScreensData['run']>): string {
+  let s = `${run.verdict}|${run.totalTime}|${run.leftover}|`;
+  for (const st of run.stages) s += `${st.time}:${st.points};`;
+  return s;
 }
 
 // ---------------------------------------------------------------------------
