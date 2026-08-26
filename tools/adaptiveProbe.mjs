@@ -184,14 +184,16 @@ check(
 // single step made a correct ladder look broken.
 const t = report.tiers;
 check(
-  t.high.samples > t.medium.samples &&
+  t.ultra.samples > t.high.samples &&
     t.medium.bloom &&
+    t.high.interiorLines &&
+    t.medium.interiorLines &&
     !t.low.bloom &&
     !t.low.interiorLines &&
     t.ultra.pixelRatio > t.high.pixelRatio,
   'the tier ladder sheds work in the right order',
-  `res ${t.ultra.pixelRatio}>${t.high.pixelRatio}, msaa ${t.high.samples}>${t.medium.samples}, ` +
-    `lines/bloom off at low`,
+  `res ${t.ultra.pixelRatio}>${t.high.pixelRatio}, msaa ${t.ultra.samples}>${t.high.samples}, ` +
+    `lines stay on through medium, bloom/lines off at low`,
 );
 check(
   report.recovered.pixelRatio > report.bottom.pixelRatio,

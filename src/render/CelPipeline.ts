@@ -60,7 +60,7 @@ const BLOOM_STRENGTH = 0.3;
 export const QUALITY_PRESETS: Record<'low' | 'medium' | 'high' | 'ultra', PipelineQuality> = {
   low: { pixelRatio: 1.0, samples: 0, bloom: false, interiorLines: false, bloomScale: 4 },
   medium: { pixelRatio: 1.0, samples: 0, bloom: true, interiorLines: true, bloomScale: 4 },
-  high: { pixelRatio: 1.5, samples: 2, bloom: true, interiorLines: true, bloomScale: 3 },
+  high: { pixelRatio: 1.5, samples: 0, bloom: true, interiorLines: true, bloomScale: 3 },
   ultra: { pixelRatio: 2.0, samples: 4, bloom: true, interiorLines: true, bloomScale: 2 },
 };
 

@@ -322,7 +322,7 @@ export class WakeField implements GameSystem {
         break;
       case 'high':
         this.setResolution(512);
-        this.setUpdateRate(45);
+        this.setUpdateRate(30);
         break;
       case 'ultra':
         this.setResolution(1024);

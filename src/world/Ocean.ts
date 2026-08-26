@@ -308,9 +308,10 @@ export class Ocean {
   setQuality(tier: OceanQuality): void {
     const u = this.material.uniforms;
     const defs = this.material.defines as Record<string, string | number>;
-    const before = `${defs.INK_TIER_LOW ?? ''}|${defs.INK_TIER_MED ?? ''}`;
+    const before = `${defs.INK_TIER_LOW ?? ''}|${defs.INK_TIER_MED ?? ''}|${defs.INK_TIER_HIGH ?? ''}`;
     delete defs.INK_TIER_LOW;
     delete defs.INK_TIER_MED;
+    delete defs.INK_TIER_HIGH;
     switch (tier) {
       case 'low':
         u.uDetailStrength.value = 0.0;
@@ -333,7 +334,8 @@ export class Ocean {
         u.uSparkleAmount.value = 1.0;
         u.uDetailFadeStart.value = 110;
         u.uDetailFadeEnd.value = 760;
-        this.setDensity(256, 100);
+        this.setDensity(224, 88);
+        defs.INK_TIER_HIGH = 1;
         break;
       case 'ultra':
         u.uDetailStrength.value = 1.0;
@@ -343,7 +345,7 @@ export class Ocean {
         this.setDensity(384, 132);
         break;
     }
-    const after = `${defs.INK_TIER_LOW ?? ''}|${defs.INK_TIER_MED ?? ''}`;
+    const after = `${defs.INK_TIER_LOW ?? ''}|${defs.INK_TIER_MED ?? ''}|${defs.INK_TIER_HIGH ?? ''}`;
     if (after !== before) this.material.needsUpdate = true;
   }
 
@@ -771,20 +773,32 @@ vec3 detailWave(vec2 p, float t, float px) {
   vec3 b = rippleOctave(q, t, vec2(-0.3894,  0.9211),  6.70, 0.145, 1.28, 2.1, px);
   q += b.xy * 1.7;
   vec3 c = rippleOctave(q, t, vec2( 0.6402, -0.7682),  3.90, 0.120, 1.55, 4.3, px);
+#ifdef INK_TIER_LOW
+  return (a + b + c) * gust;
+#else
   q += c.xy * 1.1;
   vec3 d = rippleOctave(q, t, vec2(-0.9563, -0.2924),  2.30, 0.098, 1.82, 1.2, px);
   q += d.xy * 0.7;
   vec3 e = rippleOctave(q, t, vec2( 0.2079,  0.9781),  1.31, 0.072, 2.10, 5.6, px);
+#ifdef INK_TIER_MED
+  return (a + b + c + d + e) * gust;
+#else
   // The last two octaves exist for the close-up shot alone: at three metres a
   // 1.3 m ripple is still the size of a dinner plate on screen, and the water
   // came back as flat cyan continents. Everywhere else px has already faded
   // them to nothing, so they cost only the two smoothsteps that reject them.
   q += e.xy * 0.5;
   vec3 f = rippleOctave(q, t, vec2(-0.6820, 0.7314), 0.78, 0.055, 2.42, 3.0, px);
+#ifdef INK_TIER_HIGH
+  return (a + b + c + d + e + f) * gust;
+#else
   q += f.xy * 0.35;
   vec3 g = rippleOctave(q, t, vec2( 0.9911, -0.1332), 0.44, 0.042, 2.75, 0.6, px);
 
   return (a + b + c + d + e + f + g) * gust;
+#endif
+#endif
+#endif
 }
 
 /**
@@ -941,7 +955,16 @@ void main() {
   vec3 dw = vec3(0.0);
   // Horizon pixels cannot hold the ripple. Paying seven octaves there is how
   // a chase frame spends most of its fragment time on water nobody can read.
-  if (detailAmt > 0.04 && px < 1.35) dw = detailWave(p, uTime, px) * detailAmt;
+#ifdef INK_TIER_LOW
+  const float DETAIL_PX = 0.92;
+#elif defined(INK_TIER_MED)
+  const float DETAIL_PX = 1.05;
+#elif defined(INK_TIER_HIGH)
+  const float DETAIL_PX = 1.20;
+#else
+  const float DETAIL_PX = 1.35;
+#endif
+  if (detailAmt > 0.04 && px < DETAIL_PX) dw = detailWave(p, uTime, px) * detailAmt;
   vec3 N = normalize(vec3(vNormal.x - dw.x, vNormal.y, vNormal.z - dw.y));
   vec3 V = normalize(cameraPosition - vWorldPos);
   float ndv = clamp(dot(N, V), 0.0, 1.0);

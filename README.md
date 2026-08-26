@@ -153,11 +153,12 @@ are pulled when a frame runs long:
 1. **Adaptive resolution.** A windowed median of frame time (not a mean — one GC
    spike should not drop a tier) moves the pixel ratio in small steps with a long
    cooldown, so the controller cannot oscillate.
-2. **Quality tiers** drop MSAA, then the interior-line pass, then bloom. The same
-   callback also rebuilds the ocean disc coarser, shrinks the wake field, trims
-   spray, and hides distant AI riders. HUD canvas density follows the same
-   ladder (1× on low/medium, 1.5× on high, 2× on ultra). Low hides the cloud
-   dome overdraw entirely.
+2. **Quality tiers** drop MSAA (ultra only), then the interior-line pass, then
+   bloom. Default play (`high`) is 1.5× with no MSAA so a mid-range GPU is not
+   paying 2× samples on every ocean pixel. The same callback also rebuilds the
+   ocean disc coarser, shrinks the wake field, trims spray, and hides distant
+   AI riders. HUD canvas density follows the same ladder (1× on low/medium,
+   1.5× on high, 2× on ultra). Low hides the cloud dome overdraw entirely.
 3. **Instancing** for buoys and spray. Gates merge both pylons, collars and
    lamps into one mesh per material so the field is five draws a gate, not
    thirteen, plus three ink shells. Rider suit/gear/skin/visor materials are
