@@ -1420,7 +1420,11 @@ void main() {
   // Glitter lattice compiled out. Medium keeps the rest of the water and only
   // drops the per-pixel hashes; low drops this and the depth foam together.
 #else
+#ifdef INK_TIER_HIGH
+  if (px < 0.85) {
+#else
   if (px < 1.22) {
+#endif
   float bigGlint;
   // Scale the glint lattice with distance so a sparkle stays roughly the same
   // size on screen.

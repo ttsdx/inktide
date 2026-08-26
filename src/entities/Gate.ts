@@ -493,7 +493,6 @@ const SHELL_HW = 15;
 const SHELL_H = 8.4;
 const _inst = new Matrix4();
 const _scale = new Matrix4();
-const _zero = new Matrix4().makeScale(0, 0, 0);
 
 export class GateField {
   readonly root = new Group();
@@ -577,18 +576,20 @@ export class GateField {
     for (const g of this.gates) g.update(ctx, eye, fadeStart, fadeEnd);
     const n = this.batch.length;
     if (n === 0 || this.shells.length === 0) return;
+    let written = 0;
     for (let i = 0; i < n; i++) {
       const g = this.batch[i];
-      if (!g.group.visible) {
-        for (const mesh of this.shells) mesh.setMatrixAt(i, _zero);
-        continue;
-      }
+      if (!g.group.visible) continue;
       g.group.updateMatrix();
       _scale.makeScale(g.halfWidth / SHELL_HW, g.mastHeight / SHELL_H, 1);
       _inst.multiplyMatrices(g.group.matrix, _scale);
-      for (const mesh of this.shells) mesh.setMatrixAt(i, _inst);
+      for (const mesh of this.shells) mesh.setMatrixAt(written, _inst);
+      written++;
     }
-    for (const mesh of this.shells) mesh.instanceMatrix.needsUpdate = true;
+    for (const mesh of this.shells) {
+      mesh.count = written;
+      mesh.instanceMatrix.needsUpdate = true;
+    }
   }
 
   dispose(): void {

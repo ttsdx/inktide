@@ -83,6 +83,8 @@ export class Boat {
   private readonly geometries: BufferGeometry[] = [];
   private readonly materials: Material[] = [];
   private readonly outlines: Mesh[] = [];
+  /** Small moving parts dropped on distant AI hulls. */
+  private readonly extras: Object3D[] = [];
 
   /** Smoothed drives. All of these are integrated, never assigned from input. */
   private steer = 0;
@@ -208,8 +210,8 @@ export class Boat {
     // completely swallows a 7 cm rudder blade, which at race distance turns
     // into a black smudge behind the boat.
     const fine = { outline: { widthPx: 3.4 } };
-    this.part(buildFinGeometry(), paint, this.visual, 'fin', fine);
-    this.part(buildEngineGeometry(), trim, this.visual, 'engine', fine);
+    this.extras.push(this.part(buildFinGeometry(), paint, this.visual, 'fin', fine));
+    this.extras.push(this.part(buildEngineGeometry(), trim, this.visual, 'engine', fine));
     // The handlebar hangs off a pivot on its own steering axis so it can be
     // turned. It used to be parented straight to the hull at a fixed transform
     // and never moved, while the rider's hands swung up to 5 cm fore and aft
@@ -221,6 +223,7 @@ export class Boat {
     this.barPivot.name = 'handlebarPivot';
     this.barPivot.position.set(0, HANDLEBAR_POINT.y, HANDLEBAR_POINT.z);
     this.visual.add(this.barPivot);
+    this.extras.push(this.barPivot);
     const bars = this.part(buildHandlebarGeometry(), trim, this.barPivot, 'handlebar', fine);
     bars.position.set(0, -HANDLEBAR_POINT.y, -HANDLEBAR_POINT.z);
 
@@ -231,6 +234,7 @@ export class Boat {
     this.rudder.name = 'rudderPivot';
     this.rudder.position.copy(RUDDER_PIVOT);
     this.visual.add(this.rudder);
+    this.extras.push(this.rudder);
     this.part(buildRudderGeometry(), trim, this.rudder, 'rudder', fine);
 
     this.riderMount = new Object3D();
@@ -264,6 +268,7 @@ export class Boat {
     this.glow.position.copy(ENGINE_NOZZLE);
     this.glow.userData.noOutline = true;
     this.visual.add(this.glow);
+    this.extras.push(this.glow);
 
     this.root.traverse((o) => {
       o.layers.set(LAYER_OPAQUE);
@@ -425,6 +430,14 @@ export class Boat {
    */
   setInkVisible(on: boolean): void {
     for (const shell of this.outlines) shell.visible = on;
+  }
+
+  /**
+   * Engine, bars, rudder, fin, nozzle. On a distant AI hull these are a few
+   * pixels and still a draw each — the paint shell already reads as a boat.
+   */
+  setDetailVisible(on: boolean): void {
+    for (const o of this.extras) o.visible = on;
   }
 
   dispose(): void {

@@ -630,6 +630,7 @@ export class Game {
       const riderOn = inView && (i === 0 || distSq < lodSq);
       r.rider.root.visible = riderOn;
       r.boat.setInkVisible(inView && (i === 0 || distSq < inkSq));
+      r.boat.setDetailVisible(riderOn);
     }
   }
 
