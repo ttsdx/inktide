@@ -47,7 +47,7 @@ export class Sky {
     this.group.frustumCulled = false;
 
     // --- dome ---------------------------------------------------------------
-    const domeGeo = new SphereGeometry(1, 32, 20);
+    const domeGeo = new SphereGeometry(1, 16, 12);
     this.domeMat = new ShaderMaterial({
       name: 'SkyDome',
       glslVersion: GLSL3,
@@ -118,7 +118,7 @@ export class Sky {
       vertexShader: DOME_VERT,
       fragmentShader: CLOUD_FRAG,
     });
-    this.clouds = new Mesh(new SphereGeometry(0.98, 32, 20), this.cloudMat);
+    this.clouds = new Mesh(new SphereGeometry(0.98, 16, 12), this.cloudMat);
     this.clouds.name = 'Clouds';
     this.clouds.renderOrder = -99;
     this.clouds.frustumCulled = false;

@@ -768,6 +768,16 @@ vec3 rippleOctave(
  * to the band shapes rather than only re-lighting the swell's.
  */
 vec3 detailWave(vec2 p, float t, float px) {
+#ifdef INK_TIER_HIGH
+  // Play retina: three texture taps of filtered noise here is fill we do not
+  // have. A pair of slow sines still wanders the first octave off its lattice
+  // (the corduroy the noise warp was invented to kill) without a fetch.
+  float gust = 0.55 + 0.45 * sin(p.x * 0.0062 + t * 0.0035) * cos(p.y * 0.0051 - t * 0.0027);
+  vec2 warp = vec2(
+    sin(p.x * 0.0143 + t * 0.0061) * cos(p.y * 0.0112),
+    sin(p.y * 0.0143 - t * 0.0048) * cos(p.x * 0.0094)
+  ) * 0.5;
+#else
   float gust = 0.35 + 0.95 * noiseR(p * 0.0062 + vec2(t * 0.0035, -t * 0.0027));
 
   // Warp the sampling frame before the FIRST octave, not only between octaves.
@@ -790,6 +800,7 @@ vec3 detailWave(vec2 p, float t, float px) {
     noiseR(p * 0.0143 + vec2(t * 0.0061, 0.31)),
     noiseG(p * 0.0143 + vec2(0.17, -t * 0.0048))
   ) - 0.5;
+#endif
   vec2 pw = p + warp * 9.0;
 
   vec3 a = rippleOctave(pw, t, vec2( 0.8607,  0.5091), 11.30, 0.170, 1.00, 0.0, px);
@@ -1042,7 +1053,10 @@ void main() {
   // dark commas that covers the foreground of the third capture, so the deep
   // band is cut almost entirely against the broad surface and each successive
   // band picks up more of the detail.
-  float formBroad = clamp((dot(normalize(vNormal), SUN_DIR) - uFormRange.x) / max(uFormRange.y - uFormRange.x, 0.01), 0.0, 1.0);
+  float formBroad = formT;
+  if (dot(dw, dw) > 1e-8) {
+    formBroad = clamp((dot(normalize(vNormal), SUN_DIR) - uFormRange.x) / max(uFormRange.y - uFormRange.x, 0.01), 0.0, 1.0);
+  }
   float bandBroad = formBroad * uBandMix.x * formMix + bandBase;
 
   float b1 = hardStep(uBands.x, mix(band, bandBroad, 0.62));
