@@ -155,10 +155,13 @@ are pulled when a frame runs long:
    cooldown, so the controller cannot oscillate.
 2. **Quality tiers** drop MSAA, then the interior-line pass, then bloom. The same
    callback also rebuilds the ocean disc coarser, shrinks the wake field, trims
-   spray, and hides distant AI riders.
+   spray, and hides distant AI riders. HUD canvas density follows the same
+   ladder (1× on low/medium, 1.5× on high, 2× on ultra). Low hides the cloud
+   dome overdraw entirely.
 3. **Instancing** for buoys and spray. Gates merge both pylons, collars and
    lamps into one mesh per material so the field is five draws a gate, not
-   thirteen, plus three ink shells.
+   thirteen, plus three ink shells. Rider suit/gear/skin/visor materials are
+   shared across the field.
 4. **LOD by construction.** The ocean's radial disc has exponentially-spaced
    rings, so vertex density tracks 1/z without a discrete pop, and short-wave
    detail is damped with distance. Far gates skip their Gerstner solve and are

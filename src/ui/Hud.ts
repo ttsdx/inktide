@@ -149,6 +149,8 @@ export class Hud {
   private h = 1;
   private u = 1;
   private dpr = 1;
+  /** Quality-tier cap on HUD backing-store density. 3D owns the retina budget. */
+  private dprCap = 2;
 
   // --- animation state ------------------------------------------------------
 
@@ -208,12 +210,20 @@ export class Hud {
     this.resize();
   }
 
+  /**
+   * Match HUD canvas density to the 3D quality tier. The overlay is already
+   * aliased type, so dropping it to 1x on low/medium is free sharpness that
+   * the ocean needs more than the needle does.
+   */
+  setQuality(tier: 'low' | 'medium' | 'high' | 'ultra'): void {
+    this.dprCap = tier === 'low' || tier === 'medium' ? 1 : tier === 'high' ? 1.5 : 2;
+    this.resize();
+  }
+
   /** Re-size the backing store to the viewport. Safe to call every frame. */
   resize(): void {
     if (this.disposed) return;
-    // Capped at 2: past that the HUD is redrawing four times the pixels for a
-    // difference nobody can see, on the same frame budget as the ocean.
-    this.dpr = clamp(window.devicePixelRatio || 1, 1, 2);
+    this.dpr = clamp(window.devicePixelRatio || 1, 1, this.dprCap);
     this.w = Math.max(1, window.innerWidth);
     this.h = Math.max(1, window.innerHeight);
     const pw = Math.round(this.w * this.dpr);

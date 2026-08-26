@@ -339,7 +339,7 @@ export class Boat {
     this.barPivot.rotation.y = radians;
   }
 
-  applyState(state: BoatState, dt: number): void {
+  applyState(state: BoatState, dt: number, visuals = true): void {
     // A long frame — tab restore, first frame after a shader compile — would
     // otherwise slam every smoother at once and snap the rudder to full lock.
     const h = clamp(dt, 0, 1 / 15);
@@ -371,6 +371,14 @@ export class Boat {
     _up.crossVectors(_fwd, _right).normalize();
     _basis.makeBasis(_right, _up, _fwd);
     this.root.quaternion.setFromRotationMatrix(_basis);
+
+    // Off-screen boats still need a correct transform (wake, minimap, the
+    // moment they re-enter the frustum). Squat, rudder and nozzle heat are
+    // only drawn, so they wait until the hull is visible again.
+    if (!visuals) {
+      this.prevForwardSpeed = state.forwardSpeed;
+      return;
+    }
 
     // --- squat -------------------------------------------------------------
     // Nose DOWN under acceleration, up under braking. That is the opposite of

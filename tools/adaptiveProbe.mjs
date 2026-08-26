@@ -198,6 +198,18 @@ check(
   'headroom lets it climb back',
   `${report.bottom.pixelRatio} -> ${report.recovered.pixelRatio}`,
 );
+{
+  const slow = report.trace.filter((s) => s.label === 'start' || String(s.label).startsWith('slow'));
+  let rose = false;
+  for (let i = 1; i < slow.length; i++) {
+    if (slow[i].pixelRatio > slow[i - 1].pixelRatio + 0.001) rose = true;
+  }
+  check(
+    !rose,
+    'dropping a tier never raises pixel ratio',
+    slow.map((s) => s.pixelRatio).join(' → '),
+  );
+}
 check(
   report.marginalFlips <= 6,
   'marginal frames do not oscillate',

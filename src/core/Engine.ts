@@ -40,7 +40,7 @@ class AdaptiveQuality {
   tier: QualityTier = 'high';
   enabled = true;
 
-  push(dtMs: number): 'up' | 'down' | null {
+  push(dtMs: number, dpr: number): 'up' | 'down' | null {
     if (!this.enabled) return null;
     this.samples.push(dtMs);
     if (this.samples.length > this.window) this.samples.shift();
@@ -55,26 +55,48 @@ class AdaptiveQuality {
     // p90 catches sustained hitching that the median hides.
     const p90 = sorted[Math.floor(sorted.length * 0.9)];
 
+    const effective = (tier: QualityTier, scale: number): number => {
+      const base = Math.min(dpr, QUALITY_PRESETS[tier].pixelRatio);
+      return Math.max(0.5, base * scale);
+    };
+
     if (median > 18.5 || p90 > 26) {
       if (this.scale > this.minScale) {
         this.scale = Math.max(this.minScale, this.scale - 0.08);
         this.cooldown = 90;
         return 'down';
       }
-      if (this.tier === 'ultra') this.tier = 'high';
-      else if (this.tier === 'high') this.tier = 'medium';
-      else if (this.tier === 'medium') this.tier = 'low';
-      else return null;
-      this.scale = 1.0;
+      const next: QualityTier | null =
+        this.tier === 'ultra' ? 'high' : this.tier === 'high' ? 'medium' : this.tier === 'medium' ? 'low' : null;
+      if (!next) return null;
+      // Keep the framebuffer size from jumping *up* when a cheaper preset has
+      // a higher base pixel ratio than `minScale * oldBase` (ultra 0.62×2 = 1.24
+      // vs high at scale 1 = 1.5). The drop has to make the frame cheaper.
+      const keep = effective(this.tier, this.scale);
+      this.tier = next;
+      const newBase = Math.min(dpr, QUALITY_PRESETS[this.tier].pixelRatio);
+      this.scale = MathUtils.clamp(keep / newBase, this.minScale, 1);
       this.cooldown = 150;
       return 'down';
     }
 
     // Only climb back when there is real headroom, and climb slower than we
-    // fall so a marginal machine settles instead of pumping.
-    if (median < 12.5 && p90 < 15.5 && this.scale < this.maxScale) {
-      this.scale = Math.min(this.maxScale, this.scale + 0.04);
-      this.cooldown = 150;
+    // fall so a marginal machine settles instead of pumping. Resolution first;
+    // a tier climb preserves the current pixel ratio and lets scale walk up.
+    if (median < 12.5 && p90 < 15.5) {
+      if (this.scale < this.maxScale) {
+        this.scale = Math.min(this.maxScale, this.scale + 0.04);
+        this.cooldown = 150;
+        return 'up';
+      }
+      const next: QualityTier | null =
+        this.tier === 'low' ? 'medium' : this.tier === 'medium' ? 'high' : this.tier === 'high' ? 'ultra' : null;
+      if (!next) return null;
+      const keep = effective(this.tier, this.scale);
+      this.tier = next;
+      const newBase = Math.min(dpr, QUALITY_PRESETS[this.tier].pixelRatio);
+      this.scale = MathUtils.clamp(keep / newBase, this.minScale, 1);
+      this.cooldown = 180;
       return 'up';
     }
     return null;
@@ -173,7 +195,8 @@ export class Engine {
    * by hand proved the presets existed, not that the controller reached them.
    */
   pumpAdaptive(dtMs: number): 'up' | 'down' | null {
-    const changed = this.adaptive.push(dtMs);
+    const dpr = Math.min(window.devicePixelRatio || 1, this.maxPixelRatio);
+    const changed = this.adaptive.push(dtMs, dpr);
     if (changed) this.commitQuality();
     return changed;
   }

@@ -38,6 +38,7 @@ export class Sky {
   private domeMat: ShaderMaterial;
   private cloudMat: ShaderMaterial;
   private sunMat: ShaderMaterial;
+  private clouds: Mesh;
 
   constructor() {
     this.group.name = 'Sky';
@@ -104,6 +105,7 @@ export class Sky {
       transparent: true,
       depthWrite: false,
       depthTest: false,
+      defines: {},
       uniforms: {
         uTime: { value: 0 },
         uNoise: { value: packedNoise() },
@@ -115,12 +117,27 @@ export class Sky {
       vertexShader: DOME_VERT,
       fragmentShader: CLOUD_FRAG,
     });
-    const clouds = new Mesh(new SphereGeometry(0.98, 64, 40), this.cloudMat);
-    clouds.name = 'Clouds';
-    clouds.renderOrder = -99;
-    clouds.frustumCulled = false;
-    clouds.userData.noOutline = true;
-    this.group.add(clouds);
+    this.clouds = new Mesh(new SphereGeometry(0.98, 48, 28), this.cloudMat);
+    this.clouds.name = 'Clouds';
+    this.clouds.renderOrder = -99;
+    this.clouds.frustumCulled = false;
+    this.clouds.userData.noOutline = true;
+    this.group.add(this.clouds);
+  }
+
+  /**
+   * Clouds are a full-screen transparent overdraw of FBM. Low skips them.
+   * Medium compiles out the warp sample and the sun-rim density fetch so the
+   * dome still reads as painted sky without paying two extra 5-octave fields.
+   */
+  setQuality(tier: 'low' | 'medium' | 'high' | 'ultra'): void {
+    this.clouds.visible = tier !== 'low';
+    const defs = this.cloudMat.defines as Record<string, string | number>;
+    const before = defs.INK_SKY_CHEAP ?? '';
+    if (tier === 'medium' || tier === 'low') defs.INK_SKY_CHEAP = 1;
+    else delete defs.INK_SKY_CHEAP;
+    const after = defs.INK_SKY_CHEAP ?? '';
+    if (after !== before) this.cloudMat.needsUpdate = true;
   }
 
   /** Keep the dome centred on the camera and advance the drift. */
@@ -130,7 +147,7 @@ export class Sky {
     this.group.position.copy(camera.position);
     this.group.scale.setScalar(r);
     this.domeMat.uniforms.uTime.value = elapsed;
-    this.cloudMat.uniforms.uTime.value = elapsed;
+    if (this.clouds.visible) this.cloudMat.uniforms.uTime.value = elapsed;
     this.sunMat.uniforms.uTime.value = elapsed;
   }
 
@@ -398,7 +415,12 @@ float fbm(vec2 p) {
   float v = 0.0;
   float a = 0.5;
   mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);
-  for (int i = 0; i < 5; i++) {
+#ifdef INK_SKY_CHEAP
+  const int OCT = 3;
+#else
+  const int OCT = 5;
+#endif
+  for (int i = 0; i < OCT; i++) {
     v += texture(uNoise, p * 0.5).r * a;
     p = rot * p * 2.03 + 11.7;
     a *= 0.5;
@@ -422,10 +444,14 @@ float deckField(vec3 d, vec2 bias) {
   uv += vec2(uTime * 0.0042, uTime * 0.0017);
 
   float base = fbm(uv);
+#ifdef INK_SKY_CHEAP
+  return base;
+#else
   // A second, slower field warps the first so shapes evolve instead of sliding
   // rigidly across the sky.
   float warp = fbm(uv * 0.43 + vec2(uTime * 0.0021, -uTime * 0.0009));
   return mix(base, warp, 0.36);
+#endif
 }
 
 /**
@@ -495,17 +521,21 @@ void main() {
   float inside = step(thr, body);
   if (inside < 0.5) { outColor = vec4(0.0); outNormalDepth = vec4(0.0, 0.0, 0.0, 1.0); return; }
 
+#ifdef INK_SKY_CHEAP
+  float rim = 0.0;
+#else
   // The lit rim: sample the field shifted *towards* the sun. Where the shifted
   // sample has fallen outside the cloud but this one is still inside, we are
   // standing on the sun-facing edge. The shift distance IS the rim width, so it
   // has to be small — an early version used 0.030 and lit half of every cloud.
   vec2 sunBias = normalize(uSunDir.xz) * 0.0075;
   float shifted = cloudDensity(d, sunBias);
+  float rim = step(shifted, thr);
+#endif
 
   // Three tones plus the rim. Clouds painted with a single tone read as paper
   // cut-outs; three gives them just enough form to sit in the sky without ever
   // becoming volumetric.
-  float rim = step(shifted, thr);
   float mid = step(thr + 0.045, body);
   float deep = step(thr + 0.115, body);
 

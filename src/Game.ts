@@ -218,8 +218,8 @@ export class Game {
     if (this.player) this.snapCameraToPlayer();
 
     this.engine.onUpdate(this.update);
-    this.engine.onQualityChange = (tier) => this.applyQuality(tier);
-    this.applyQuality(this.engine.adaptive.tier);
+    this.engine.onQualityChange = (tier, scale) => this.applyQuality(tier, scale);
+    this.applyQuality(this.engine.adaptive.tier, this.engine.adaptive.scale);
 
     // One warm-up frame so every shader is compiled before the first visible
     // frame — otherwise the first second of play is a compile stutter.
@@ -231,11 +231,13 @@ export class Game {
    * The pipeline is already handled by Engine; this is ocean density, wake
    * resolution, spray count, and how far a rider is allowed to stay visible.
    */
-  private applyQuality(tier: QualityTier): void {
+  private applyQuality(tier: QualityTier, _scale = 1): void {
     this.ocean.setQuality(tier);
     this.wake?.setQuality(tier);
     this.spray?.setQuality(tier);
     this.racingLine?.setQuality(tier);
+    this.sky.setQuality(tier);
+    this.hud?.setQuality(tier);
     this.riderLodDist = tier === 'low' ? 28 : tier === 'medium' ? 52 : tier === 'high' ? 80 : 120;
     if (this.racingLine) this.racingLine.glow.visible = tier !== 'low';
   }
@@ -472,7 +474,7 @@ export class Game {
       const r = this.racers[i];
       const s = r.physics;
 
-      r.boat.applyState(s, dt);
+      r.boat.applyState(s, dt, r.boat.root.visible);
 
       // Celebration ramps in over a second once a racer is done, so the pose
       // change reads as a reaction rather than a state flip.

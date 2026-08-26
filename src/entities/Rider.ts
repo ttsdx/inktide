@@ -1,12 +1,12 @@
-import { Color, Euler, Group, MathUtils, Mesh, Object3D, Quaternion, Vector3 } from 'three';
+import { Euler, Group, MathUtils, Mesh, Object3D, Quaternion, Vector3 } from 'three';
 import type { BufferGeometry, Material } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { BoatState, FrameContext, RiderPose } from '../contracts.ts';
 import { PALETTE } from '../core/Palette.ts';
 import { LAYER_OPAQUE } from '../render/layers.ts';
 import { CelMaterial } from '../render/materials/CelMaterial.ts';
-import type { CelMaterialOptions } from '../render/materials/CelMaterial.ts';
 import { outlineHierarchy } from '../render/OutlineHull.ts';
+import { riderMaterials } from './riderMaterials.ts';
 import {
   BAR_PIVOT,
   BAR_YAW_PER_LEAN,
@@ -255,7 +255,6 @@ export class Rider {
 
   private readonly colorIndex: number;
   private readonly geometries: BufferGeometry[] = [];
-  private readonly materials: CelMaterial[] = [];
   private readonly outlines: Mesh[] = [];
   private readonly sides: SideChain[];
 
@@ -288,8 +287,6 @@ export class Rider {
     this.rig = new RiderRig();
     this.root.add(this.rig.root);
 
-    const accent = PALETTE.racer[this.colorIndex];
-
     // Two suit tones rather than one: the darker `suit` carries the large
     // masses and the lighter `suitLit` picks out helmet, gloves and boots. That
     // separation is what stops the character collapsing into one silhouette
@@ -299,62 +296,9 @@ export class Rider {
     // multiplies the ramp by the base colour, so tinting the ramp to the paint
     // colour squares it and the shadows go muddy; the shared neutral ramp keeps
     // the rider's shadow temperature identical to the hull it sits on.
-    const suit = this.material({
-      color: PALETTE.suit,
-      rimColor: PALETTE.visor,
-      rimStrength: 0.34,
-      rimPower: 3.2,
-      specStrength: 0.3,
-      specSize: 0.22,
-      matcapStrength: 0.16,
-      name: 'RiderSuit',
-    });
-    const gear = this.material({
-      color: PALETTE.suitLit,
-      rimColor: PALETTE.visor,
-      rimStrength: 0.42,
-      rimPower: 2.8,
-      specStrength: 0.62,
-      specSize: 0.36,
-      matcapStrength: 0.3,
-      name: 'RiderGear',
-    });
-    const paint = this.material({
-      color: accent,
-      rimColor: accent,
-      rimStrength: 0.5,
-      rimPower: 2.4,
-      specStrength: 0.5,
-      specSize: 0.3,
-      matcapStrength: 0.22,
-      name: 'RiderPaint',
-    });
-    const skin = this.material({
-      color: PALETTE.skin,
-      rimColor: PALETTE.skinShade,
-      rimStrength: 0.25,
-      rimPower: 3.5,
-      specStrength: 0.12,
-      specSize: 0.5,
-      matcapStrength: 0.05,
-      name: 'RiderSkin',
-    });
-    // The visor is the only emissive surface on the rider. It is doing a
-    // specific job: a helmet reads as a featureless lump unless something marks
-    // where the face is, and a bright cyan shape does that at any distance,
-    // in shadow, and from behind a wall of spray.
-    const visor = this.material({
-      color: new Color().copy(PALETTE.visor).multiplyScalar(0.34),
-      emissive: PALETTE.visor,
-      emissiveStrength: 0.9,
-      rimColor: PALETTE.visor,
-      rimStrength: 1.1,
-      rimPower: 2.0,
-      specStrength: 1.0,
-      specSize: 0.55,
-      matcapStrength: 0.45,
-      name: 'RiderVisor',
-    });
+    //
+    // Materials are shared across the field — see riderMaterials.ts.
+    const { suit, gear, paint, skin, visor } = riderMaterials(this.colorIndex);
 
     const r = this.rig;
     this.part(buildPelvis(), suit, r.hips, 'pelvis');
@@ -405,12 +349,6 @@ export class Rider {
       o.layers.set(LAYER_OPAQUE);
       o.frustumCulled = false;
     });
-  }
-
-  private material(opts: CelMaterialOptions): CelMaterial {
-    const m = new CelMaterial(opts);
-    this.materials.push(m);
-    return m;
   }
 
   private part(geo: BufferGeometry, mat: CelMaterial, parent: Object3D, name: string): Mesh {
@@ -846,8 +784,6 @@ export class Rider {
   dispose(): void {
     for (const g of this.geometries) g.dispose();
     this.geometries.length = 0;
-    for (const m of this.materials) m.dispose();
-    this.materials.length = 0;
     // Ink shells share their geometry with the mesh they wrap, so only their
     // materials are still outstanding. `disposeOutlines()` would also collect
     // them at shutdown, but a rider can be torn down mid-session.
