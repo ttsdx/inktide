@@ -774,9 +774,13 @@ vec3 detailWave(vec2 p, float t, float px) {
   // (the corduroy the noise warp was invented to kill) without a fetch.
   float gust = 0.55 + 0.45 * sin(p.x * 0.0062 + t * 0.0035) * cos(p.y * 0.0051 - t * 0.0027);
   vec2 warp = vec2(
-    sin(p.x * 0.0143 + t * 0.0061) * cos(p.y * 0.0112),
-    sin(p.y * 0.0143 - t * 0.0048) * cos(p.x * 0.0094)
-  ) * 0.5;
+    sin(dot(p, vec2(0.0143, 0.0081)) + t * 0.0061),
+    sin(dot(p, vec2(-0.0094, 0.0143)) - t * 0.0048)
+  ) * 0.55 + vec2(
+    sin(dot(p, vec2(0.027, -0.019)) + 1.7),
+    sin(dot(p, vec2(0.021, 0.031)) + 2.4)
+  ) * 0.45;
+  warp *= 0.5;
 #else
   float gust = 0.35 + 0.95 * noiseR(p * 0.0062 + vec2(t * 0.0035, -t * 0.0027));
 
