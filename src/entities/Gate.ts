@@ -1,17 +1,22 @@
 import {
   BufferGeometry,
+  Color,
   CylinderGeometry,
   Float32BufferAttribute,
+  GLSL3,
   Group,
+  InstancedBufferAttribute,
   InstancedMesh,
   Matrix4,
   Mesh,
   Quaternion,
+  ShaderMaterial,
   Vector3,
 } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { PALETTE } from '../core/Palette.ts';
 import { CelMaterial, OutlineMaterial, makeGlowMaterial } from '../render/materials/CelMaterial.ts';
+import { MRT_OUTPUTS } from '../render/shaderLib.ts';
 import { computeSmoothedNormals, outlineHierarchy } from '../render/OutlineHull.ts';
 import { LAYER_OPAQUE, LAYER_OVERLAY } from '../render/layers.ts';
 import { detailAt, sampleOcean, type OceanSample } from '../world/gerstner.ts';
@@ -127,10 +132,14 @@ export class Gate {
   readonly halfWidth: number;
   readonly mastHeight: number;
 
-  private readonly banner: Mesh;
-  private readonly bannerMaterial: CelMaterial;
-  private readonly lamp: Mesh;
-  private readonly lampMaterial: CelMaterial;
+  overlayOn = false;
+  lampGlow = 1.4;
+  bannerGlow = 0.75;
+
+  private readonly banner: Mesh | null;
+  private readonly bannerMaterial: CelMaterial | null;
+  private readonly lamp: Mesh | null;
+  private readonly lampMaterial: CelMaterial | null;
 
   private active = false;
   /** Seconds remaining on the pass flash. */
@@ -172,10 +181,8 @@ export class Gate {
       lamps.push(placedCylinder(0.62, 0.86, 1.1, 8, x, height + 1.2, 0));
     }
 
-    // Regular gates share one instanced shell (collar, mast, arch, ink). The
-    // start/finish gate stays a unique mesh because it is taller and a
-    // different colour. Overlay lamps and the banner always stay per-gate:
-    // they pulse, and a unique uniform cannot live on an InstancedMesh.
+    // Regular gates share one instanced shell. Overlay lamps/banners are
+    // instanced too, with per-instance glow packed from each gate's pulse.
     if (!opts.instanceShell) {
       const shell = buildGateShell(this.halfWidth, height, floatRadius);
       const collar = new Mesh(shell.collar, collarMat);
@@ -188,30 +195,39 @@ export class Gate {
       this.group.add(arch);
     }
 
-    this.lampMaterial = makeGlowMaterial(glowColor.clone(), 2.1);
-    this.lamp = new Mesh(mergeOrThrow(lamps), this.lampMaterial);
-    this.lamp.name = 'lamps';
-    this.lamp.userData.noOutline = true;
-    this.lamp.layers.set(LAYER_OVERLAY);
-    this.group.add(this.lamp);
+    this.lampMaterial = null;
+    this.lamp = null;
+    this.bannerMaterial = null;
+    this.banner = null;
 
-    this.bannerMaterial = makeGlowMaterial(glowColor.clone(), 1.35, 0.92);
-    this.banner = new Mesh(
-      buildBanner(this.halfWidth * 0.92, height + 0.55, this.halfWidth * 0.24, 2.3),
-      this.bannerMaterial,
-    );
-    this.banner.userData.noOutline = true;
-    this.banner.renderOrder = 4;
-    this.group.add(this.banner);
+    if (!opts.instanceShell) {
+      this.lampMaterial = makeGlowMaterial(glowColor.clone(), 2.1);
+      this.lamp = new Mesh(mergeOrThrow(lamps), this.lampMaterial);
+      this.lamp.name = 'lamps';
+      this.lamp.userData.noOutline = true;
+      this.lamp.layers.set(LAYER_OVERLAY);
+      this.group.add(this.lamp);
+
+      this.bannerMaterial = makeGlowMaterial(glowColor.clone(), 1.35, 0.92);
+      this.banner = new Mesh(
+        buildBanner(this.halfWidth * 0.92, height + 0.55, this.halfWidth * 0.24, 2.3),
+        this.bannerMaterial,
+      );
+      this.banner.userData.noOutline = true;
+      this.banner.renderOrder = 4;
+      this.group.add(this.banner);
+    } else {
+      for (const g of lamps) g.dispose();
+    }
 
     if (!opts.instanceShell) {
       outlineHierarchy(this.group, { widthPx: 2.2, distanceTaper: 0.9 });
       this.group.traverse((o) => {
         if (!o.userData.noOutline) o.layers.set(LAYER_OPAQUE);
       });
+      this.lamp!.layers.set(LAYER_OVERLAY);
+      this.banner!.layers.set(LAYER_OVERLAY);
     }
-    this.lamp.layers.set(LAYER_OVERLAY);
-    this.banner.layers.set(LAYER_OVERLAY);
 
     // Deterministic per-gate phase so the twelve gates do not pulse in unison.
     this.pulsePhase = index * 1.37;
@@ -255,9 +271,9 @@ export class Gate {
     // are a few pixels of cyan and still a draw. The start/finish gate keeps
     // them longer so the main straight still reads from the pack.
     const overlayRange = this.mastHeight > 10 ? 220 : 120;
-    const overlayOn = dist < overlayRange;
-    this.lamp.visible = overlayOn;
-    this.banner.visible = overlayOn;
+    this.overlayOn = dist < overlayRange;
+    if (this.lamp) this.lamp.visible = this.overlayOn;
+    if (this.banner) this.banner.visible = this.overlayOn;
 
     _side.copy(this.across);
     const lx = this.centre.x + _side.x * this.halfWidth;
@@ -325,8 +341,10 @@ export class Gate {
     const flashLift = this.flash > 0 ? Math.ceil((this.flash / 0.42) * 3) * 1.5 : 0;
 
     const strength = 0.75 + activeLift + flashLift;
-    this.bannerMaterial.uniforms.uEmissiveStrength.value = strength;
-    this.lampMaterial.uniforms.uEmissiveStrength.value = 1.4 + activeLift * 0.8 + flashLift;
+    this.bannerGlow = strength;
+    this.lampGlow = 1.4 + activeLift * 0.8 + flashLift;
+    if (this.bannerMaterial) this.bannerMaterial.uniforms.uEmissiveStrength.value = strength;
+    if (this.lampMaterial) this.lampMaterial.uniforms.uEmissiveStrength.value = this.lampGlow;
   }
 
   dispose(): void {
@@ -339,8 +357,8 @@ export class Gate {
         m.geometry.dispose();
       }
     });
-    this.bannerMaterial.dispose();
-    this.lampMaterial.dispose();
+    if (this.bannerMaterial) this.bannerMaterial.dispose();
+    if (this.lampMaterial) this.lampMaterial.dispose();
     if (this.ownsKit) {
       this.kit.hull.dispose();
       this.kit.collar.dispose();
@@ -510,6 +528,9 @@ export class GateField {
   private readonly shells: InstancedMesh[] = [];
   private readonly shellGeos: BufferGeometry[] = [];
   private readonly inkMats: OutlineMaterial[] = [];
+  private readonly overlays: InstancedMesh[] = [];
+  private readonly overlayGlow: InstancedBufferAttribute[] = [];
+  private readonly overlayMats: ShaderMaterial[] = [];
 
   constructor(course: Course, opts: GateOptions = {}) {
     this.root.name = 'Gates';
@@ -568,6 +589,35 @@ export class GateField {
         this.root.add(ink);
         this.shells.push(ink);
       }
+
+      const glowColor = opts.glowColor ?? PALETTE.gateGlow;
+      const lampParts: BufferGeometry[] = [];
+      for (const side of [-1, 1]) {
+        lampParts.push(placedCylinder(0.62, 0.86, 1.1, 8, side * SHELL_HW, SHELL_H + 1.2, 0));
+      }
+      const lampGeo = mergeOrThrow(lampParts);
+      const bannerGeo = buildBanner(SHELL_HW * 0.92, SHELL_H + 0.55, SHELL_HW * 0.24, 2.3);
+      this.shellGeos.push(lampGeo, bannerGeo);
+
+      const overlaySpecs: Array<[BufferGeometry, number, string]> = [
+        [lampGeo, 1, 'GateLamps'],
+        [bannerGeo, 0.92, 'GateBanners'],
+      ];
+      for (const [geo, opacity, name] of overlaySpecs) {
+        const glow = new InstancedBufferAttribute(new Float32Array(n), 1);
+        geo.setAttribute('aGlow', glow);
+        this.overlayGlow.push(glow);
+        const mat = makeInstancedGlow(glowColor, opacity);
+        this.overlayMats.push(mat);
+        const mesh = new InstancedMesh(geo, mat, n);
+        mesh.name = name;
+        mesh.frustumCulled = false;
+        mesh.userData.noOutline = true;
+        mesh.layers.set(LAYER_OVERLAY);
+        mesh.count = 0;
+        this.root.add(mesh);
+        this.overlays.push(mesh);
+      }
     }
   }
 
@@ -598,12 +648,43 @@ export class GateField {
       mesh.count = written;
       mesh.instanceMatrix.needsUpdate = true;
     }
+
+    if (this.overlays.length === 2) {
+      let shown = 0;
+      const lampGlow = this.overlayGlow[0];
+      const bannerGlow = this.overlayGlow[1];
+      for (let i = 0; i < n; i++) {
+        const g = this.batch[i];
+        if (!g.group.visible || !g.overlayOn) continue;
+        g.group.updateMatrix();
+        _scale.makeScale(g.halfWidth / SHELL_HW, g.mastHeight / SHELL_H, 1);
+        _inst.multiplyMatrices(g.group.matrix, _scale);
+        for (const mesh of this.overlays) mesh.setMatrixAt(shown, _inst);
+        lampGlow.setX(shown, g.lampGlow);
+        bannerGlow.setX(shown, g.bannerGlow);
+        shown++;
+      }
+      for (let o = 0; o < this.overlays.length; o++) {
+        const mesh = this.overlays[o];
+        mesh.count = shown;
+        mesh.instanceMatrix.needsUpdate = true;
+        this.overlayGlow[o].needsUpdate = true;
+      }
+    }
   }
 
   dispose(): void {
     for (const g of this.gates) g.dispose();
     this.gates.length = 0;
     this.batch.length = 0;
+    for (const mesh of this.overlays) {
+      mesh.removeFromParent();
+      mesh.dispose();
+    }
+    this.overlays.length = 0;
+    this.overlayGlow.length = 0;
+    for (const m of this.overlayMats) m.dispose();
+    this.overlayMats.length = 0;
     for (const mesh of this.shells) {
       mesh.removeFromParent();
       mesh.dispose();
@@ -628,3 +709,45 @@ export class GateField {
 function gateHalfWidth(cp: Checkpoint): number {
   return Math.max(13, Math.min(26, cp.width));
 }
+
+function makeInstancedGlow(color: Color, opacity: number): ShaderMaterial {
+  return new ShaderMaterial({
+    name: 'GateGlow',
+    glslVersion: GLSL3,
+    transparent: opacity < 1,
+    depthWrite: false,
+    uniforms: {
+      uColor: { value: color.clone() },
+      uOpacity: { value: opacity },
+      uCameraFar: { value: 4000 },
+      uCameraNear: { value: 0.35 },
+    },
+    vertexShader: INSTANCED_GLOW_VERT,
+    fragmentShader: INSTANCED_GLOW_FRAG,
+  });
+}
+
+const INSTANCED_GLOW_VERT = /* glsl */ `
+precision highp float;
+in float aGlow;
+out float vGlow;
+void main() {
+  vGlow = aGlow;
+  mat4 model = modelMatrix * instanceMatrix;
+  vec4 world = model * vec4(position, 1.0);
+  gl_Position = projectionMatrix * viewMatrix * world;
+}
+`;
+
+const INSTANCED_GLOW_FRAG = /* glsl */ `
+precision highp float;
+${MRT_OUTPUTS}
+uniform vec3 uColor;
+uniform float uOpacity;
+in float vGlow;
+void main() {
+  outColor = vec4(uColor * vGlow, uOpacity);
+  outNormalDepth = vec4(0.5, 0.5, 0.5, 1.0);
+}
+`;
+

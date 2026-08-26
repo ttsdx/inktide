@@ -799,11 +799,12 @@ vec3 detailWave(vec2 p, float t, float px) {
 #else
   q += c.xy * 1.1;
   vec3 d = rippleOctave(q, t, vec2(-0.9563, -0.2924),  2.30, 0.098, 1.82, 1.2, px);
+#ifdef INK_TIER_HIGH
+  return (a + b + c + d) * gust;
+#else
   q += d.xy * 0.7;
   vec3 e = rippleOctave(q, t, vec2( 0.2079,  0.9781),  1.31, 0.072, 2.10, 5.6, px);
 #ifdef INK_TIER_MED
-  return (a + b + c + d + e) * gust;
-#elif defined(INK_TIER_HIGH)
   return (a + b + c + d + e) * gust;
 #else
   q += e.xy * 0.5;
@@ -977,7 +978,7 @@ void main() {
 #elif defined(INK_TIER_MED)
   const float DETAIL_PX = 1.05;
 #elif defined(INK_TIER_HIGH)
-  const float DETAIL_PX = 1.05;
+  const float DETAIL_PX = 0.95;
 #else
   const float DETAIL_PX = 1.35;
 #endif

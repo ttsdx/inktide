@@ -118,10 +118,15 @@ out vec3 vColorAttr;
 out float vViewDepth;
 
 void main() {
-  vec4 world = modelMatrix * vec4(position, 1.0);
+#ifdef USE_INSTANCING
+  mat4 model = modelMatrix * instanceMatrix;
+#else
+  mat4 model = modelMatrix;
+#endif
+  vec4 world = model * vec4(position, 1.0);
   vWorldPos = world.xyz;
-  vWorldNormal = normalize(mat3(modelMatrix) * normal);
-  vViewNormal = normalize(normalMatrix * normal);
+  vWorldNormal = normalize(mat3(model) * normal);
+  vViewNormal = normalize(mat3(viewMatrix) * vWorldNormal);
 
   #ifdef USE_COLOR
     vColorAttr = color;
@@ -252,12 +257,17 @@ out float vViewDepth;
 out vec3 vViewNormal;
 
 void main() {
-  vec4 world = modelMatrix * vec4(position, 1.0);
+#ifdef USE_INSTANCING
+  mat4 model = modelMatrix * instanceMatrix;
+#else
+  mat4 model = modelMatrix;
+#endif
+  vec4 world = model * vec4(position, 1.0);
   vec4 viewPos = viewMatrix * world;
   float depth = max(-viewPos.z, 0.001);
   vViewDepth = depth;
 
-  vec3 nView = normalize(normalMatrix * outlineNormal);
+  vec3 nView = normalize(mat3(viewMatrix * model) * outlineNormal);
   vViewNormal = nView;
 
   vec4 clip = projectionMatrix * viewPos;

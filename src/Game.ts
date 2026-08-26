@@ -113,6 +113,7 @@ export class Game {
       adaptive,
       maxPixelRatio: 2,
       preserveDrawingBuffer: url.searchParams.get('harness') === '1',
+      nativeResStart: url.searchParams.has('quality') || url.searchParams.get('harness') === '1',
     });
     this.input = new Input(canvas);
     this.rig = new CameraRig(this.engine.camera);

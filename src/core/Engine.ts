@@ -17,6 +17,13 @@ export interface EngineOptions {
    * On a real GPU it forces a copy every frame; play sessions leave it off.
    */
   preserveDrawingBuffer?: boolean;
+  /**
+   * Start at the preset's native pixel ratio. Play sessions omit this and
+   * open at ~1×, then climb if the GPU has headroom — opening a retina
+   * laptop at 2× is what made the sim feel half-speed (dt clamped while
+   * frames ran 80–100 ms).
+   */
+  nativeResStart?: boolean;
 }
 
 /**
@@ -31,11 +38,12 @@ export interface EngineOptions {
 class AdaptiveQuality {
   private samples: number[] = [];
   private cooldown = 0;
-  private readonly window = 45;
+  /** Short enough to react within a second at 60 Hz, long enough to ignore a hitch. */
+  private readonly window = 18;
 
   /** Current scale applied on top of the tier's base pixel ratio. */
   scale = 1.0;
-  minScale = 0.62;
+  minScale = 0.5;
   maxScale = 1.0;
   tier: QualityTier = 'high';
   enabled = true;
@@ -61,9 +69,9 @@ class AdaptiveQuality {
     };
 
     if (median > 18.5 || p90 > 26) {
-      if (this.scale > this.minScale) {
-        this.scale = Math.max(this.minScale, this.scale - 0.08);
-        this.cooldown = 90;
+      if (this.scale > this.minScale + 0.001) {
+        this.scale = Math.max(this.minScale, this.scale - 0.12);
+        this.cooldown = 36;
         return 'down';
       }
       const next: QualityTier | null =
@@ -76,7 +84,7 @@ class AdaptiveQuality {
       this.tier = next;
       const newBase = Math.min(dpr, QUALITY_PRESETS[this.tier].pixelRatio);
       this.scale = MathUtils.clamp(keep / newBase, this.minScale, 1);
-      this.cooldown = 150;
+      this.cooldown = 72;
       return 'down';
     }
 
@@ -85,8 +93,8 @@ class AdaptiveQuality {
     // a tier climb preserves the current pixel ratio and lets scale walk up.
     if (median < 12.5 && p90 < 15.5) {
       if (this.scale < this.maxScale) {
-        this.scale = Math.min(this.maxScale, this.scale + 0.04);
-        this.cooldown = 150;
+        this.scale = Math.min(this.maxScale, this.scale + 0.08);
+        this.cooldown = 72;
         return 'up';
       }
       const next: QualityTier | null =
@@ -96,7 +104,7 @@ class AdaptiveQuality {
       this.tier = next;
       const newBase = Math.min(dpr, QUALITY_PRESETS[this.tier].pixelRatio);
       this.scale = MathUtils.clamp(keep / newBase, this.minScale, 1);
-      this.cooldown = 180;
+      this.cooldown = 90;
       return 'up';
     }
     return null;
@@ -104,7 +112,7 @@ class AdaptiveQuality {
 
   reset(): void {
     this.samples.length = 0;
-    this.cooldown = 60;
+    this.cooldown = 8;
   }
 }
 
@@ -147,6 +155,13 @@ export class Engine {
     this.baseTier = opts.tier ?? 'high';
     this.adaptive.tier = this.baseTier;
     this.adaptive.enabled = opts.adaptive !== false;
+    if (opts.adaptive === false || opts.nativeResStart) {
+      this.adaptive.scale = 1;
+    } else {
+      const dpr = Math.min(window.devicePixelRatio || 1, this.maxPixelRatio);
+      const base = Math.min(dpr, QUALITY_PRESETS[this.baseTier].pixelRatio);
+      this.adaptive.scale = MathUtils.clamp(1 / Math.max(base, 1e-6), this.adaptive.minScale, 1);
+    }
 
     this.renderer = new WebGLRenderer({
       canvas: opts.canvas,
@@ -270,8 +285,10 @@ export class Engine {
     this.rafId = requestAnimationFrame(this.loop);
 
     const raw = this.clock.getDelta();
-    // Clamp so an alt-tab does not teleport every boat across the course.
-    const dt = MathUtils.clamp(raw, 1 / 240, 1 / 20);
+    // Cap so an alt-tab does not teleport boats. 1/12 (not 1/20): when a
+    // retina 2× open hitch ran at ~10 fps the old cap made the race crawl at
+    // half speed. Physics still uses this dt, so the cap *is* the game clock.
+    const dt = MathUtils.clamp(raw, 1 / 240, 1 / 12);
     this.dt = dt;
     this.elapsed += dt;
     this.frame++;

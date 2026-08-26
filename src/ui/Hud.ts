@@ -211,12 +211,11 @@ export class Hud {
   }
 
   /**
-   * Match HUD canvas density to the 3D quality tier. The overlay is already
-   * aliased type, so dropping it to 1x on low/medium is free sharpness that
-   * the ocean needs more than the needle does.
+   * Match HUD canvas density to the 3D quality tier. The overlay is aliased
+   * type, so 1× is enough on every play tier; only ultra (captures) keeps 2×.
    */
   setQuality(tier: 'low' | 'medium' | 'high' | 'ultra'): void {
-    this.dprCap = tier === 'low' || tier === 'medium' ? 1 : 2;
+    this.dprCap = tier === 'ultra' ? 2 : 1;
     this.resize();
   }
 

@@ -162,10 +162,12 @@ are pulled when a frame runs long:
    AI riders. HUD canvas density follows the same ladder (1× on low/medium,
    2× on high and ultra). Low hides the cloud dome overdraw entirely. Ocean
    feature LOD (ripple, foam, hull contact) is measured in CSS pixels, so a 2×
-   framebuffer sharpens bands without evaluating extra octaves.
-3. **Instancing** for buoys, spray, and the regular gate shells (collar, mast,
-   arch, plus ink). The unique start/finish gate stays a mesh. Overlay lamps
-   and banners stay per-gate because they pulse. Rider suit/gear/skin/visor
+   framebuffer sharpens bands without evaluating extra octaves. A play session
+   opens at ~1× and climbs toward the tier's retina cap if frames stay under
+   budget, so a slow GPU is not stuck simulating at half speed while 2× hitchs.
+3. **Instancing** for buoys, spray, regular gate shells (collar, mast, arch,
+   plus ink) and the pulsing overlay lamps/banners. The unique start/finish
+   gate stays a mesh. Rider suit/gear/skin/visor
    materials are shared across the field.
 4. **LOD by construction.** The ocean's radial disc has exponentially-spaced
    rings, so vertex density tracks 1/z without a discrete pop, and short-wave
