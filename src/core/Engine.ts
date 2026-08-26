@@ -91,14 +91,14 @@ class AdaptiveQuality {
     // Only climb back when there is real headroom, and climb slower than we
     // fall so a marginal machine settles instead of pumping. Resolution first;
     // a tier climb preserves the current pixel ratio and lets scale walk up.
-    if (median < 12.5 && p90 < 15.5) {
+    if (median < 11 && p90 < 14) {
       if (this.scale < this.maxScale) {
         this.scale = Math.min(this.maxScale, this.scale + 0.08);
         this.cooldown = 72;
         return 'up';
       }
       const next: QualityTier | null =
-        this.tier === 'low' ? 'medium' : this.tier === 'medium' ? 'high' : this.tier === 'high' ? 'ultra' : null;
+        this.tier === 'low' ? 'medium' : this.tier === 'medium' ? 'high' : null;
       if (!next) return null;
       const keep = effective(this.tier, this.scale);
       this.tier = next;

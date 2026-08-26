@@ -163,7 +163,9 @@ are pulled when a frame runs long:
    play tier (2× only on ultra). Low hides the cloud dome overdraw entirely.
    Ocean feature LOD is measured in CSS pixels, so a denser framebuffer
    sharpens bands without evaluating extra octaves. A play session opens at
-   ~1× and climbs toward the tier cap if frames stay under budget.
+   ~1× and climbs toward the tier cap if frames stay under budget. Adaptive
+   never promotes into ultra (2× + 4× MSAA); that tier is opt-in via
+   `?quality=ultra`.
 3. **Instancing** for buoys, spray, regular gate shells (collar, mast, arch,
    plus ink) and the pulsing overlay lamps/banners. The unique start/finish
    gate stays a mesh. Rider suit/gear/skin/visor
