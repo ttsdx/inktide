@@ -423,8 +423,14 @@ export class Rider {
 
   /** Same-bone, same-material parts. One draw and one ink shell instead of N. */
   private parts(geos: BufferGeometry[], mat: CelMaterial, parent: Object3D, name: string): Mesh {
-    const merged = mergeGeometries(geos, false);
-    for (const g of geos) g.dispose();
+    const prepared = geos.map((g) => {
+      if (!g.index) return g;
+      const flat = g.toNonIndexed();
+      g.dispose();
+      return flat;
+    });
+    const merged = mergeGeometries(prepared, false);
+    for (const g of prepared) g.dispose();
     if (!merged) throw new Error(`Rider: failed to merge ${name}`);
     return this.part(merged, mat, parent, name);
   }
