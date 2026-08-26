@@ -359,28 +359,16 @@ float fbm(vec2 p) {
 }
 
 /** Density field at a direction, offset along the sun direction for the rim. */
-float cloudDensity(vec3 d, vec2 bias) {
-  // Project the view ray onto a plane 1 unit above the camera. Rays near the
-  // horizon stretch enormously, which is exactly the perspective a real cloud
-  // deck has, and it keeps clouds out of the water.
-  //
-  // WHY THE ZENITH IS EMPTY, AND WHAT DOES NOT FIX IT.
-  //
-  // This projection necessarily collapses overhead: directly above you, you are
-  // looking at one point of the deck, so d.xz goes to zero and an upward frame
-  // samples a patch of the noise about 0.05 across. A capture looking up is one
-  // flat tone with nothing in it.
-  //
-  // Reparameterising near the zenith — blending towards the ray direction
-  // scaled up — was tried at 13x and 46x and made it worse, not better. The
-  // reason is that FBM's amplitude falls with frequency: sampling further up
-  // the octaves puts the field deep in its small-amplitude range, where it
-  // almost never crosses the coverage threshold, so the zenith went from one
-  // flat tone to a scatter of specks. Rescaling the input cannot work here.
-  //
-  // What would: a second cloud layer for the upper dome with its own noise
-  // field and its own coverage, rather than trying to make one field serve a
-  // projection that is singular at one end of it.
+/**
+ * The deck as seen from below: the view ray projected onto a plane 1 unit above
+ * the camera. Rays near the horizon stretch enormously, which is exactly the
+ * perspective a real cloud deck has, and it keeps clouds out of the water.
+ *
+ * Singular overhead. Directly above you, you are looking at one point of the
+ * deck, so d.xz goes to zero and an upward-looking frame samples a patch of
+ * noise about 0.05 across — one value.
+ */
+float deckField(vec3 d, vec2 bias) {
   float y = max(d.y, 0.035);
   vec2 uv = d.xz / y * 0.115 + bias;
   uv += vec2(uTime * 0.0042, uTime * 0.0017);
@@ -389,12 +377,63 @@ float cloudDensity(vec3 d, vec2 bias) {
   // A second, slower field warps the first so shapes evolve instead of sliding
   // rigidly across the sky.
   float warp = fbm(uv * 0.43 + vec2(uTime * 0.0021, -uTime * 0.0009));
-  base = mix(base, warp, 0.36);
+  return mix(base, warp, 0.36);
+}
+
+/**
+ * The upper dome, where the deck projection has nothing left to say.
+ *
+ * Sampled on the ray direction itself, which is well behaved at the pole, with
+ * a second lookup at right angles so the field varies in all three axes without
+ * needing a 3D texture.
+ */
+float zenithField(vec3 d, vec2 bias) {
+  // The scale is derived, not chosen. A horizon frame samples the deck over
+  // about 0.77 of uv — d.xz sweeps roughly one unit and the projection there
+  // multiplies it by 0.115/0.15 — and that span is what gives the deck its
+  // cumulus-sized masses. An upward frame sweeps d.xz over about 0.95, so
+  // matching the span wants a multiplier near 0.8. At 2.6 the zenith came back
+  // covered in scraps a third of the size of anything on the horizon.
+  vec2 a = d.xz * 0.85 + bias + vec2(uTime * 0.0038, -uTime * 0.0016);
+  vec2 b = vec2(d.y * 0.85, (d.x + d.z) * 0.6) + bias;
+  // A small positive bias: the upper dome gets slightly more generous coverage
+  // than the deck, which is what stops the ceiling reading as a few strays.
+  return fbm(a) * 0.62 + fbm(b) * 0.38 + 0.06;
+}
+
+float cloudDensity(vec3 d, vec2 bias) {
+  // BLEND THE DENSITIES, NOT THE COORDINATES.
+  //
+  // Mixing the two parameterisations into one uv and sampling once was tried
+  // first and produced a scatter of specks. Blending two uv fields whose
+  // gradients differ by an order of magnitude adds a term proportional to the
+  // gradient of the blend factor times the difference between them, and that
+  // term is large: the sampled coordinate jitters and the noise comes out as
+  // mush. Sampling each field on its own coordinate and mixing the two scalars
+  // cannot do that.
+  float up = smoothstep(0.35, 0.90, d.y);
+  float base = mix(deckField(d, bias), zenithField(d, bias), up);
 
   // Fade the deck out towards the horizon so the tiling never becomes legible.
   float horizonFade = smoothstep(0.02, 0.30, d.y);
-  // ...and out towards the zenith so we are not staring at a solid ceiling.
-  float zenithFade = 1.0 - smoothstep(0.62, 0.96, d.y) * 0.65;
+  // ...and thin it towards the zenith so it is not a solid ceiling.
+  //
+  // This was 0.65, and combined with the singular projection it is the whole
+  // reason the top of the sky was empty: the zenith received one constant
+  // density and then had 65% of it taken away, so it could never clear the
+  // coverage threshold whatever the noise did. Both of the earlier attempts to
+  // fix the zenith by rescaling the coordinate failed against this, because a
+  // better coordinate does not help a density that has already been multiplied
+  // below the cut.
+  //
+  // The size of it is arithmetic rather than taste. Coverage puts the cut at
+  // 0.60, so a fade of f means the raw field has to reach 0.60/(1-f) up there
+  // against 0.60 at the horizon: at 0.65 that is 1.71, unreachable; at 0.28 it
+  // is 0.82, which a first attempt showed is rare enough to give a handful of
+  // strays at the frame edge and nothing else. At 0.12 it is 0.68, close
+  // enough to the deck's own cut that the zenith carries comparable cover
+  // while still thinning towards the pole.
+  float zenithFade = 1.0 - smoothstep(0.62, 0.96, d.y) * 0.12;
   return base * horizonFade * zenithFade;
 }
 
