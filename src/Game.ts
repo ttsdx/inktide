@@ -161,7 +161,6 @@ export class Game {
     this.raceRoot.add(this.racingLine.mesh);
 
     this.gates = new GateField(this.course);
-    this.gates.root.traverse((o) => o.layers.set(LAYER_OPAQUE));
     this.raceRoot.add(this.gates.root);
 
     this.buoys = new BuoyField(this.course);
@@ -608,19 +607,17 @@ export class Game {
     this.frustumMatrix.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
     this.frustum.setFromProjectionMatrix(this.frustumMatrix);
     const lodSq = this.riderLodDist * this.riderLodDist;
+    const inkSq = (this.riderLodDist * 0.45) * (this.riderLodDist * 0.45);
     const eye = cam.position;
     for (let i = 0; i < this.racers.length; i++) {
       const r = this.racers[i];
       this.racerSphere.center.copy(r.physics.position);
       const inView = this.frustum.intersectsSphere(this.racerSphere);
       r.boat.root.visible = inView;
-      // The player is always fully detailed when on screen: the chase cam sits
-      // close enough that a missing rider is a missing hero. AI boats past the
-      // lod distance are hulls — 44 rider meshes plus their ink shells, at a
-      // size where the character is already a few pixels tall.
-      const riderOn =
-        inView && (i === 0 || eye.distanceToSquared(r.physics.position) < lodSq);
+      const distSq = eye.distanceToSquared(r.physics.position);
+      const riderOn = inView && (i === 0 || distSq < lodSq);
       r.rider.root.visible = riderOn;
+      r.boat.setInkVisible(inView && (i === 0 || distSq < inkSq));
     }
   }
 

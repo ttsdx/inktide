@@ -836,9 +836,13 @@ float foamNoise(vec2 p, float t, float px) {
   // Sliding the frequency keeps a tear at every distance and holds its feature
   // size near three pixels, which is above the sampling limit everywhere, so
   // the edge is torn in the near field and still torn at the horizon.
+#ifdef INK_TIER_LOW
+  return (big * 0.55 + mid * 0.45) - 0.5;
+#else
   float fineScale = 0.42 / (1.0 + px * 1.3);
   float fine = noiseA(p * fineScale + vec2(-t * 0.046, t * 0.038));
   return (big * 0.46 + mid * 0.34 + fine * 0.20) - 0.5;
+#endif
 }
 
 /**
@@ -1242,25 +1246,17 @@ void main() {
   // uses a fixed edge width.
   // -----------------------------------------------------------------------
   float depthFoam = 0.0;
+#ifndef INK_TIER_LOW
   {
     vec2 suv = (vClipPos.xy / vClipPos.w) * 0.5 + 0.5;
     float sceneDepth = texture(uSceneDepth, suv).w * uCameraFar;
     float ourDepth = -(viewMatrix * vec4(vWorldPos, 1.0)).z;
-    // sceneDepth of 0 means nothing was drawn there (open sky/water).
-    //
-    // The test is that the hull is BEHIND this water pixel and close to it,
-    // which is the definition of a pixel of water lying over something
-    // submerged. It used to be written the other way round — hull in front of
-    // the water — and that condition is unreachable: a pixel where the hull is
-    // in front is a pixel where the hull was drawn and the water fragment lost
-    // the depth test, so it never runs this code at all. The term had been
-    // dead since it was written, which is why no hull, buoy or gate collar in
-    // the game has ever had a waterline.
     if (sceneDepth > 0.001 && sceneDepth > ourDepth) {
       float diff = sceneDepth - ourDepth;
       depthFoam = (1.0 - smoothstep(0.0, 1.25, diff));
     }
   }
+#endif
 
   // -----------------------------------------------------------------------
   // 9. FOAM COMPOSITE

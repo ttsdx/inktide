@@ -361,9 +361,16 @@ export class CelPipeline {
 
     // --- 1c. copy the packed normal/depth attachment so the water can read it
     //         while still writing to the same attachment.
-    this.copyPass.uniforms.tColor.value = this.main.textures[1];
-    this.copyPass.render(r, this.depthCopy);
-    this.onDepthReady?.(this.depthCopy.texture, w, h);
+    //
+    // Skipped when interior lines are off. The copy exists for two readers:
+    // the Sobel pass and the ocean's waterline foam. Both are compiled or
+    // switched off on the low tier, so the extra full-screen blit is free
+    // work on the fill-bound path.
+    if (this.quality.interiorLines) {
+      this.copyPass.uniforms.tColor.value = this.main.textures[1];
+      this.copyPass.render(r, this.depthCopy);
+      this.onDepthReady?.(this.depthCopy.texture, w, h);
+    }
 
     // --- 1d. ocean, then transparent overlays. No clear: both slices must
     //         depth-test against the opaque geometry already in the buffer.

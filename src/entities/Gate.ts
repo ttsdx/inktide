@@ -7,6 +7,7 @@ import {
   Quaternion,
   Vector3,
 } from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { PALETTE } from '../core/Palette.ts';
 import { CelMaterial, makeGlowMaterial } from '../render/materials/CelMaterial.ts';
 import { outlineHierarchy } from '../render/OutlineHull.ts';
@@ -120,8 +121,8 @@ export class Gate {
 
   private readonly banner: Mesh;
   private readonly bannerMaterial: CelMaterial;
-  private readonly lamps: Mesh[] = [];
-  private readonly lampMaterials: CelMaterial[] = [];
+  private readonly lamp: Mesh;
+  private readonly lampMaterial: CelMaterial;
 
   private active = false;
   /** Seconds remaining on the pass flash. */
@@ -156,45 +157,35 @@ export class Gate {
     const collarMat = this.kit.collar;
     const archMat = this.kit.arch;
 
+    // One mesh per material, not one mesh per part. Twelve gates × two pylons
+    // × collar/mast/lamp plus ink shells was 150-odd draws for furniture that
+    // is on screen two at a time. Baking both sides into a single geometry
+    // keeps the silhouette identical and cuts the field to five draws a gate
+    // (collar, mast, arch, lamp, banner) plus three ink shells.
+    const collars: BufferGeometry[] = [];
+    const pylons: BufferGeometry[] = [];
+    const lamps: BufferGeometry[] = [];
     for (const side of [-1, 1]) {
       const x = side * this.halfWidth;
-
-      // Flotation collar: a squat drum at the waterline, widest at the bottom.
-      //
-      // It used to be widest at the top and sat 90 cm proud of the water, so
-      // the surface met it where it was still flaring outwards and the whole
-      // drum read as resting on the sea rather than floating in it. A float
-      // has to have its beam at or below its waterline; above the water it
-      // tumbles home. Same correction as the corridor buoys.
-      const collar = new Mesh(
-        new CylinderGeometry(floatRadius * 0.8, floatRadius, 1.4, 12, 1),
-        collarMat,
-      );
-      collar.position.set(x, -0.25, 0);
-      this.group.add(collar);
-
-      // Pylon: a tapered mast. 10 radial segments keeps the silhouette faceted,
-      // which the ink outline needs in order to read as drawn rather than
-      // extruded.
-      const pylon = new Mesh(
-        new CylinderGeometry(floatRadius * 0.52, floatRadius * 0.30, height, 10, 1),
-        hullMat,
-      );
-      // The base is buried inside the collar rather than perched on top of it:
-      // a mast that starts above its own float has a visible seam.
-      pylon.position.set(x, height * 0.5 + 0.1, 0);
-      this.group.add(pylon);
-
-      // Lamp on top of each pylon.
-      const lampMat = makeGlowMaterial(glowColor.clone(), 2.1);
-      const lamp = new Mesh(new CylinderGeometry(0.62, 0.86, 1.1, 8, 1), lampMat);
-      lamp.position.set(x, height + 1.2, 0);
-      lamp.userData.noOutline = true;
-      lamp.layers.set(LAYER_OVERLAY);
-      this.group.add(lamp);
-      this.lamps.push(lamp);
-      this.lampMaterials.push(lampMat);
+      collars.push(placedCylinder(floatRadius * 0.8, floatRadius, 1.4, 12, x, -0.25, 0));
+      pylons.push(placedCylinder(floatRadius * 0.52, floatRadius * 0.3, height, 10, x, height * 0.5 + 0.1, 0));
+      lamps.push(placedCylinder(0.62, 0.86, 1.1, 8, x, height + 1.2, 0));
     }
+
+    const collar = new Mesh(mergeOrThrow(collars), collarMat);
+    collar.name = 'collars';
+    this.group.add(collar);
+
+    const pylon = new Mesh(mergeOrThrow(pylons), hullMat);
+    pylon.name = 'pylons';
+    this.group.add(pylon);
+
+    this.lampMaterial = makeGlowMaterial(glowColor.clone(), 2.1);
+    this.lamp = new Mesh(mergeOrThrow(lamps), this.lampMaterial);
+    this.lamp.name = 'lamps';
+    this.lamp.userData.noOutline = true;
+    this.lamp.layers.set(LAYER_OVERLAY);
+    this.group.add(this.lamp);
 
     // The arch. Built as a chord-sampled tube rather than a TorusGeometry
     // segment so the sag is a controllable catenary-ish curve and the ends land
@@ -220,9 +211,7 @@ export class Gate {
     this.group.traverse((o) => {
       if (!o.userData.noOutline) o.layers.set(LAYER_OPAQUE);
     });
-    // The lamps and the banner belong on the overlay slice so their additive
-    // glow composites over the water rather than being written into it.
-    for (const l of this.lamps) l.layers.set(LAYER_OVERLAY);
+    this.lamp.layers.set(LAYER_OVERLAY);
     this.banner.layers.set(LAYER_OVERLAY);
 
     // Deterministic per-gate phase so the twelve gates do not pulse in unison.
@@ -330,9 +319,7 @@ export class Gate {
 
     const strength = 0.75 + activeLift + flashLift;
     this.bannerMaterial.uniforms.uEmissiveStrength.value = strength;
-    for (const m of this.lampMaterials) {
-      m.uniforms.uEmissiveStrength.value = 1.4 + activeLift * 0.8 + flashLift;
-    }
+    this.lampMaterial.uniforms.uEmissiveStrength.value = 1.4 + activeLift * 0.8 + flashLift;
   }
 
   dispose(): void {
@@ -346,7 +333,7 @@ export class Gate {
       }
     });
     this.bannerMaterial.dispose();
-    for (const m of this.lampMaterials) m.dispose();
+    this.lampMaterial.dispose();
     if (this.ownsKit) {
       this.kit.hull.dispose();
       this.kit.collar.dispose();
@@ -358,6 +345,27 @@ export class Gate {
 // ---------------------------------------------------------------------------
 // Procedural geometry
 // ---------------------------------------------------------------------------
+
+function placedCylinder(
+  top: number,
+  bottom: number,
+  height: number,
+  radial: number,
+  x: number,
+  y: number,
+  z: number,
+): BufferGeometry {
+  const g = new CylinderGeometry(top, bottom, height, radial, 1);
+  g.translate(x, y, z);
+  return g;
+}
+
+function mergeOrThrow(parts: BufferGeometry[]): BufferGeometry {
+  const merged = mergeGeometries(parts, false);
+  for (const g of parts) g.dispose();
+  if (!merged) throw new Error('Gate: mergeGeometries returned null');
+  return merged;
+}
 
 /**
  * A square-section beam swept along a shallow arc from (-halfWidth, y) to

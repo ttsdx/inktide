@@ -372,6 +372,15 @@ export class Boat {
       .lerp(PALETTE.foam, clamp(this.heat / 1.7, 0, 1));
   }
 
+  /**
+   * Ink shells are a draw per part. At the distance an AI hull is a few
+   * dozen pixels, the contour is already smaller than a pixel and only
+   * costs fills. The player keeps theirs at any range.
+   */
+  setInkVisible(on: boolean): void {
+    for (const shell of this.outlines) shell.visible = on;
+  }
+
   dispose(): void {
     for (const g of this.geometries) g.dispose();
     this.geometries.length = 0;

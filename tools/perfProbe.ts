@@ -79,9 +79,8 @@ console.log('\nCOURSE FURNITURE');
 {
   const course = new Course();
   console.log(`  gates            ${course.checkpoints.length} gates`);
-  console.log(`  Gates are the largest draw-call contributor by count. Only one or`);
-  console.log(`  two are ever in frame, so this rests entirely on frustum culling`);
-  console.log(`  doing its job — verify with the in-page draw-call counter, not here.`);
+  console.log(`  Each gate is 5 meshes (merged collars/pylons/lamps) + 3 ink`);
+  console.log(`  shells. Far gates are hidden past the water detail fade.`);
 }
 
 console.log('\nWHERE THE FRAME COST ACTUALLY IS');
@@ -90,9 +89,8 @@ console.log(`
   196k triangles, 418 meshes in the scene of which 184 are ink shells.
 
   Draw calls break down as:
-    gates          156 meshes (12 gates x 13 parts)
-    boats + riders 252 meshes (4 x 63, of which 44 per boat is the rider)
-    everything else 10
+    gates          8 meshes each (merged sides), hidden when far
+    boats + riders distance LOD: ink off, then rider off, then frustum
 
   269 draw calls is not a problem on real hardware — a modern GPU issues
   thousands without noticing. Chasing it would be optimising the wrong thing.

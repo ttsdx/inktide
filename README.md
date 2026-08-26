@@ -156,7 +156,9 @@ are pulled when a frame runs long:
 2. **Quality tiers** drop MSAA, then the interior-line pass, then bloom. The same
    callback also rebuilds the ocean disc coarser, shrinks the wake field, trims
    spray, and hides distant AI riders.
-3. **Instancing** for buoys and spray; shared materials across all twelve gates.
+3. **Instancing** for buoys and spray. Gates merge both pylons, collars and
+   lamps into one mesh per material so the field is five draws a gate, not
+   thirteen, plus three ink shells.
 4. **LOD by construction.** The ocean's radial disc has exponentially-spaced
    rings, so vertex density tracks 1/z without a discrete pop, and short-wave
    detail is damped with distance. Far gates skip their Gerstner solve and are
