@@ -117,7 +117,7 @@ export class Sky {
       vertexShader: DOME_VERT,
       fragmentShader: CLOUD_FRAG,
     });
-    this.clouds = new Mesh(new SphereGeometry(0.98, 48, 28), this.cloudMat);
+    this.clouds = new Mesh(new SphereGeometry(0.98, 32, 20), this.cloudMat);
     this.clouds.name = 'Clouds';
     this.clouds.renderOrder = -99;
     this.clouds.frustumCulled = false;
