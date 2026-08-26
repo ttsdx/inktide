@@ -53,7 +53,7 @@ export class Sky {
       glslVersion: GLSL3,
       side: BackSide,
       depthWrite: false,
-      depthTest: false,
+      depthTest: true,
       uniforms: {
         uTime: { value: 0 },
         uSunDir: { value: SUN.clone() },
@@ -74,7 +74,7 @@ export class Sky {
       glslVersion: GLSL3,
       transparent: true,
       depthWrite: false,
-      depthTest: false,
+      depthTest: true,
       blending: AdditiveBlending,
       uniforms: { uTime: { value: 0 } },
       vertexShader: BILLBOARD_VERT,
@@ -104,7 +104,7 @@ export class Sky {
       side: BackSide,
       transparent: true,
       depthWrite: false,
-      depthTest: false,
+      depthTest: true,
       defines: {},
       uniforms: {
         uTime: { value: 0 },

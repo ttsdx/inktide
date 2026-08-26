@@ -344,17 +344,12 @@ export class CelPipeline {
       this.stats.triangles += r.info.render.triangles;
     };
 
-    // --- 1a. sky slice. Quarantined so its transparent, depth-test-disabled
-    //         cloud and sun quads cannot paint over the world or erase the
-    //         normal buffer (see the note in layers.ts).
+    // --- opaque, then depth copy, ocean, sky holes, overlay ---
     r.setRenderTarget(this.main);
     r.autoClear = false;
     r.clear(true, true, true);
-    camera.layers.set(LAYER_SKY);
-    r.render(scene, camera);
-    tally();
 
-    // --- 1b. opaque slice (hulls, riders, props) into the same MRT target ---
+    // --- 1a. opaque slice (hulls, riders, props) ---
     camera.layers.set(LAYER_OPAQUE);
     r.render(scene, camera);
     tally();
@@ -376,6 +371,16 @@ export class CelPipeline {
     //         depth-test against the opaque geometry already in the buffer.
     r.setRenderTarget(this.main);
     camera.layers.set(LAYER_OCEAN);
+    r.render(scene, camera);
+    tally();
+
+    // Sky last among the solid slices, with depth test on. The dome used to
+    // paint the whole target first, then the ocean overwrote every water
+    // pixel — a full-screen fill that never showed. Drawing it into the
+    // leftover far-plane holes (zenith, above the horizon) is the same picture
+    // at a fraction of the fill. Overlay still follows so spray and lamps sit
+    // on top of both water and sky.
+    camera.layers.set(LAYER_SKY);
     r.render(scene, camera);
     tally();
 
