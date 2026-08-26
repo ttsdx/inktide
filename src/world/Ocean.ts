@@ -782,19 +782,13 @@ vec3 detailWave(vec2 p, float t, float px) {
   vec3 e = rippleOctave(q, t, vec2( 0.2079,  0.9781),  1.31, 0.072, 2.10, 5.6, px);
 #ifdef INK_TIER_MED
   return (a + b + c + d + e) * gust;
+#elif defined(INK_TIER_HIGH)
+  return (a + b + c + d + e) * gust;
 #else
-  // The last two octaves exist for the close-up shot alone: at three metres a
-  // 1.3 m ripple is still the size of a dinner plate on screen, and the water
-  // came back as flat cyan continents. Everywhere else px has already faded
-  // them to nothing, so they cost only the two smoothsteps that reject them.
   q += e.xy * 0.5;
   vec3 f = rippleOctave(q, t, vec2(-0.6820, 0.7314), 0.78, 0.055, 2.42, 3.0, px);
-#ifdef INK_TIER_HIGH
-  return (a + b + c + d + e + f) * gust;
-#else
   q += f.xy * 0.35;
   vec3 g = rippleOctave(q, t, vec2( 0.9911, -0.1332), 0.44, 0.042, 2.75, 0.6, px);
-
   return (a + b + c + d + e + f + g) * gust;
 #endif
 #endif
@@ -960,7 +954,7 @@ void main() {
 #elif defined(INK_TIER_MED)
   const float DETAIL_PX = 1.05;
 #elif defined(INK_TIER_HIGH)
-  const float DETAIL_PX = 1.20;
+  const float DETAIL_PX = 1.05;
 #else
   const float DETAIL_PX = 1.35;
 #endif
@@ -1476,17 +1470,13 @@ void main() {
   // short along the path and long across it. That is the right way round: the
   // strokes have to stack up the path towards the sun, like rungs.
   vec2 sdir = normalize(vec2(SUN_DIR.x, SUN_DIR.z));
-  vec2 sperp = vec2(sdir.y, -sdir.x);
-  // 2.3:1 and shallow, where this started at 5.6:1 and near-total. A strongly
-  // squashed noise cut hard is a comb, and a comb laid over a broad specular
-  // region is the single most artificial thing that appeared in any capture
-  // here. The strokes only have to suggest separate crests; the eye finishes
-  // the job, and the glitter lattice above is already doing the punctuation.
-  vec2 gp = vec2(dot(p, sdir) * 1.4, dot(p, sperp) * 0.62);
-  float dashN = noiseG(gp * 0.36 + vec2(uTime * 0.06, -uTime * 0.021));
-  // Never all the way to zero: the gaps are duller water, not holes punched in
-  // the reflection, and a fully cut path reads as a stencil laid over the sea.
-  float dash = mix(0.62, 1.0, fixedStep(0.47, dashN, 0.02));
+  float dash = 1.0;
+  if (px < 1.05) {
+    vec2 sperp = vec2(sdir.y, -sdir.x);
+    vec2 gp = vec2(dot(p, sdir) * 1.4, dot(p, sperp) * 0.62);
+    float dashN = noiseG(gp * 0.36 + vec2(uTime * 0.06, -uTime * 0.021));
+    dash = mix(0.62, 1.0, fixedStep(0.47, dashN, 0.02));
+  }
 
   // Confine the whole path to the sun's actual reflection road, measured with
   // the BROAD surface normal rather than the rippled one.

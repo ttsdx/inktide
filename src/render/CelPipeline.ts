@@ -354,8 +354,8 @@ export class CelPipeline {
     r.render(scene, camera);
     tally();
 
-    // --- 1c. copy the packed normal/depth attachment so the water can read it
-    //         while still writing to the same attachment.
+    // --- copy packed normal/depth so the water can read it while still
+    //     writing to the same attachment.
     //
     // Skipped when interior lines are off. The copy exists for two readers:
     // the Sobel pass and the ocean's waterline foam. Both are compiled or
@@ -367,8 +367,7 @@ export class CelPipeline {
       this.onDepthReady?.(this.depthCopy.texture, w, h);
     }
 
-    // --- 1d. ocean, then transparent overlays. No clear: both slices must
-    //         depth-test against the opaque geometry already in the buffer.
+    // --- ocean. No clear: must depth-test against opaque geometry.
     r.setRenderTarget(this.main);
     camera.layers.set(LAYER_OCEAN);
     r.render(scene, camera);
