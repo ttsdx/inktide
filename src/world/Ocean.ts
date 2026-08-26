@@ -549,6 +549,7 @@ out float vViewDist;
 out float vDetail;
 out vec4 vClipPos;
 out float vFlatDepth;
+out float vViewZ;
 
 void main() {
   // the position attribute is already centred on the camera by the mesh transform, so the
@@ -616,6 +617,7 @@ void main() {
   vFlatDepth = -(viewMatrix * vec4(xz.x, 0.0, xz.y, 1.0)).z;
 
   vec4 viewPos = viewMatrix * vec4(finalPos, 1.0);
+  vViewZ = -viewPos.z;
   vClipPos = projectionMatrix * viewPos;
   gl_Position = vClipPos;
 }
@@ -681,6 +683,7 @@ in float vViewDist;
 in float vDetail;
 in vec4 vClipPos;
 in float vFlatDepth;
+in float vViewZ;
 
 float noiseR(vec2 uv) { return texture(uNoise, uv).r; }
 float noiseG(vec2 uv) { return texture(uNoise, uv).g; }
@@ -1318,7 +1321,7 @@ void main() {
   if (px < NEAR_WORK_PX) {
     vec2 suv = (vClipPos.xy / vClipPos.w) * 0.5 + 0.5;
     float sceneDepth = texture(uSceneDepth, suv).w * uCameraFar;
-    float ourDepth = -(viewMatrix * vec4(vWorldPos, 1.0)).z;
+    float ourDepth = vViewZ;
     if (sceneDepth > 0.001 && sceneDepth > ourDepth) {
       float diff = sceneDepth - ourDepth;
       depthFoam = (1.0 - smoothstep(0.0, 1.25, diff));
@@ -1445,119 +1448,77 @@ void main() {
   col = mix(flatTone, col, mix(uPreFilterFloor, 1.0, resolve));
 
   // -----------------------------------------------------------------------
-  // 10. GLITTER
+  // 10. GLITTER + SUN PATH
   //
-  // Gated on the specular shape so glints only appear where the surface is
-  // actually turned towards the sun, and killed inside foam — white sparkles
-  // on white foam are invisible and only cost fill.
+  // Azimuth first. Specular x^64 and the dash-noise tap are only visible on
+  // the sun's reflection road; paying them on the rest of the ocean is how a
+  // 2x chase spent most of its fragment time on water that stayed navy.
   // -----------------------------------------------------------------------
-  vec3 H = normalize(SUN_DIR + V);
-  // x^64 as six squares: the ALU is cheaper than pow() and the exponent is
-  // a constant, so there is no reason to pay the general path every ocean pixel.
-  float specRaw = max(dot(N, H), 0.0);
-  specRaw *= specRaw;
-  specRaw *= specRaw;
-  specRaw *= specRaw;
-  specRaw *= specRaw;
-  specRaw *= specRaw;
-  specRaw *= specRaw;
-  float specGate = fixedStep(0.03, specRaw, 0.02);
+  vec2 sunAz = normalize(vec2(SUN_DIR.x, SUN_DIR.z));
+  vec2 toPix = normalize(p - cameraPosition.xz + vec2(1e-5, 0.0));
+  float road = smoothstep(0.72, 0.96, dot(toPix, sunAz));
+  road = floor(road * 3.0 + 0.35) / 3.0;
 
-  float glitterMask = 0.0;
-#if defined(INK_TIER_LOW) || defined(INK_TIER_MED) || defined(INK_TIER_HIGH)
-  // Glitter lattice compiled out of play tiers. Ultra keeps the hashes.
-#else
-  if (px < 1.22) {
-  float bigGlint;
-  // Scale the glint lattice with distance so a sparkle stays roughly the same
-  // size on screen.
-  //
-  // The lattice was fixed in world units, so a cell three metres from the
-  // camera covered a large part of the frame: a hero capture came back with two
-  // 200 px four-pointed stars lying on the near water, reading as stray decals
-  // rather than as light on the surface. Anime light-glitter is a small,
-  // uniform, punctuation-sized mark wherever it lands, which means its size
-  // belongs in screen space, not world space. Quantised into octaves so the
-  // lattice steps rather than sliding continuously under the camera, which
-  // would make individual glints crawl.
-  float glintOctave = exp2(floor(log2(max(vViewDist, 4.0) / 12.0)));
-  float glint = glitter(p, uTime, uSparkleDensity / glintOctave, bigGlint);
-  glitterMask = (glint * 0.6 + bigGlint * 1.0) * specGate * uSparkleAmount * detail;
-  col += glitterMask * uSunTint * 0.85 * (1.0 - foamEdge);
-  }
-#endif
-
-  // The broad sun path. Two discrete steps, and each step is an ocean-family
-  // colour rather than white: mixing towards white over blue gave the pale
-  // lavender smear in the into-sun capture, which is the one place in the
-  // frame that must not look washed out.
-  float pathRaw = specRaw * 5.0;
-  float pathA = fixedStep(0.30, pathRaw, 0.05);
-  float pathB = fixedStep(0.78, pathRaw, 0.04);
-
-  // Cut the path into separate strokes across its own axis.
-  //
-  // A sun glitter path is not a continuous bright region; it is a few hundred
-  // individual crests each catching the sun, and drawn media exaggerate that
-  // into a visible ladder of separate horizontal strokes. Left continuous, the
-  // specular lobe covered most of the lower frame in the into-sun capture as
-  // one dirty white smear — and a large near-white area over blue is precisely
-  // where the pre-filter is no help, because there is nothing sub-pixel about
-  // it and it is genuinely that colour.
-  //
-  // The sampling frame is squashed ACROSS the sun's azimuth, so the noise is
-  // short along the path and long across it. That is the right way round: the
-  // strokes have to stack up the path towards the sun, like rungs.
-  vec2 sdir = normalize(vec2(SUN_DIR.x, SUN_DIR.z));
+  float specRaw = 0.0;
+  float specGate = 0.0;
   float dash = 1.0;
-  if (px < 1.05) {
+  float glitterMask = 0.0;
+
+#if defined(INK_TIER_LOW) || defined(INK_TIER_MED) || defined(INK_TIER_HIGH)
+  if (road > 0.01) {
+    vec3 H = normalize(SUN_DIR + V);
+    specRaw = max(dot(N, H), 0.0);
+    specRaw *= specRaw;
+    specRaw *= specRaw;
+    specRaw *= specRaw;
+    specRaw *= specRaw;
+    specRaw *= specRaw;
+    specRaw *= specRaw;
+    if (px < 1.05) {
+      vec2 sdir = sunAz;
+      vec2 sperp = vec2(sdir.y, -sdir.x);
+      vec2 gp = vec2(dot(p, sdir) * 1.4, dot(p, sperp) * 0.62);
+      float dashN = noiseG(gp * 0.36 + vec2(uTime * 0.06, -uTime * 0.021));
+      dash = mix(0.62, 1.0, fixedStep(0.47, dashN, 0.02));
+    }
+  }
+#else
+  vec3 H = normalize(SUN_DIR + V);
+  specRaw = max(dot(N, H), 0.0);
+  specRaw *= specRaw;
+  specRaw *= specRaw;
+  specRaw *= specRaw;
+  specRaw *= specRaw;
+  specRaw *= specRaw;
+  specRaw *= specRaw;
+  specGate = fixedStep(0.03, specRaw, 0.02);
+  if (px < 1.22) {
+    float bigGlint;
+    float glintOctave = exp2(floor(log2(max(vViewDist, 4.0) / 12.0)));
+    float glint = glitter(p, uTime, uSparkleDensity / glintOctave, bigGlint);
+    glitterMask = (glint * 0.6 + bigGlint * 1.0) * specGate * uSparkleAmount * detail;
+    col += glitterMask * uSunTint * 0.85 * (1.0 - foamEdge);
+  }
+  if (road > 0.01 && px < 1.05) {
+    vec2 sdir = sunAz;
     vec2 sperp = vec2(sdir.y, -sdir.x);
     vec2 gp = vec2(dot(p, sdir) * 1.4, dot(p, sperp) * 0.62);
     float dashN = noiseG(gp * 0.36 + vec2(uTime * 0.06, -uTime * 0.021));
     dash = mix(0.62, 1.0, fixedStep(0.47, dashN, 0.02));
   }
+#endif
 
-  // Confine the whole path to the sun's actual reflection road, measured with
-  // the BROAD surface normal rather than the rippled one.
-  //
-  // This is the single most damaging bug found in this file. specRaw comes from
-  // the per-pixel rippled normal, and a ripple field is periodic, so on its own
-  // it crosses the path thresholds once per ridge — not in the sun's reflection
-  // but everywhere the surface exists. The frame filled with even parallel pale
-  // strokes across the entire near and mid ground, and because they are made of
-  // uCrest and uFoam they read as foam, which sent several rounds of work into
-  // the foam system looking for a defect that was never there. A term isolation
-  // pass found it in one capture: the strokes were exactly the sun path.
-  //
-  // The swell normal has no ripple periodicity, so thresholding it gives the
-  // smooth elongated road that a sun genuinely lays on water. The ripple is
-  // then free to break that road into strokes *inside* it, which is the effect
-  // that was wanted all along — and is now confined to where it belongs.
-  // The gate is the sun's AZIMUTH, not the surface normal. Only water that lies
-  // between the viewer and the sun's bearing can mirror the sun back at this
-  // camera, and unlike any normal-based test that fact does not care what the
-  // local ripple is doing — which is the whole point, because the ripple is
-  // what was leaking the path across the entire surface.
-  //
-  // A normal-based gate was tried first and failed: with a specular exponent of
-  // 64, ripple slopes of a fifth of a radian are more than enough to swing a
-  // pixel into the lobe, so the "path" reported itself as present over most of
-  // the frame no matter how the lobe was shaped.
-  vec2 sunAz = normalize(vec2(SUN_DIR.x, SUN_DIR.z));
-  vec2 toPix = normalize(p - cameraPosition.xz + vec2(1e-5, 0.0));
-  // Stepped, like every other falloff in this shader.
-  //
-  // The shapes drawn inside the sun path are quantised, but their STRENGTH was
-  // a smooth azimuthal ramp, so the path itself was a soft gradient laid across
-  // a frame in which nothing else is allowed to be one. It is wide — the whole
-  // sunward half of the near field — which is why it survived quantising the
-  // foam and the pre-filter and still left the wake reading as an airbrush.
-  float road = smoothstep(0.72, 0.96, dot(toPix, sunAz));
-  road = floor(road * 3.0 + 0.35) / 3.0;
-
-  float pathFade = detail * (1.0 - foamEdge) * dash * road;
-  col = mix(col, uCrest, pathA * 0.42 * pathFade);
-  col = mix(col, mix(uFoam, uSunTint, 0.35), pathB * 0.7 * pathFade);
+  float pathA = 0.0;
+  float pathB = 0.0;
+  float pathFade = 0.0;
+  if (road > 0.01) {
+    float pathRaw = specRaw * 5.0;
+    pathA = fixedStep(0.30, pathRaw, 0.05);
+    pathB = fixedStep(0.78, pathRaw, 0.04);
+    pathFade = detail * (1.0 - foamEdge) * dash * road;
+    col = mix(col, uCrest, pathA * 0.42 * pathFade);
+    col = mix(col, mix(uFoam, uSunTint, 0.35), pathB * 0.7 * pathFade);
+  }
 
   // -----------------------------------------------------------------------
   // 11. HAZE

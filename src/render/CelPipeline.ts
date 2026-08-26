@@ -98,6 +98,8 @@ export class CelPipeline {
   private size = new Vector2(1, 1);
   /** Framebuffer size in device pixels. */
   private fbSize = new Vector2(1, 1);
+  private readonly texel = new Vector2();
+  private readonly bloomTexel = new Vector2();
 
   constructor(renderer: WebGLRenderer, quality: PipelineQuality = QUALITY_PRESETS.high) {
     this.renderer = renderer;
@@ -354,7 +356,7 @@ export class CelPipeline {
   render(scene: Scene, camera: Camera, elapsed: number): void {
     const r = this.renderer;
     const { x: w, y: h } = this.fbSize;
-    const texel = new Vector2(1 / w, 1 / h);
+    this.texel.set(1 / w, 1 / h);
     const prevAutoClear = r.autoClear;
     const prevMask = camera.layers.mask;
 
@@ -455,7 +457,7 @@ export class CelPipeline {
       // across every band above the terminator collapsed to a pastel. A single
       // 9-tap at half resolution is a ~6 px glow — graphic, local to the thing
       // that is actually bright, and no help to anything that is not.
-      const bTexel = new Vector2(1 / this.bright.width, 1 / this.bright.height);
+      const bTexel = this.bloomTexel.set(1 / this.bright.width, 1 / this.bright.height);
       const bu = this.blurPass.uniforms;
       bu.tColor.value = this.bright.texture;
       (bu.uTexel.value as Vector2).copy(bTexel);
@@ -477,7 +479,7 @@ export class CelPipeline {
     cu.tBloom.value = bloomTex;
     cu.tDebug.value = this.main.textures[1];
     if (!this.quality.bloom) cu.uBloomStrength.value = 0;
-    (cu.uTexel.value as Vector2).copy(texel);
+    (cu.uTexel.value as Vector2).copy(this.texel);
     cu.uTime.value = elapsed;
     this.compositePass.render(r, null);
 
@@ -849,8 +851,10 @@ void main() {
   // about 1.6 passes through nearly untouched and only genuine over-range —
   // foam, sparks, gate glow — gets rolled off.
   float l = dot(c, LUMA);
-  float lm = l / (1.0 + l * 0.22);
-  c *= lm / max(l, 0.0001);
+  if (l > 1.0) {
+    float lm = l / (1.0 + l * 0.22);
+    c *= lm / l;
+  }
 
   float g = dot(c, LUMA);
 
