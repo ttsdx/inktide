@@ -1163,7 +1163,7 @@ void main() {
   // -----------------------------------------------------------------------
   float wake = 0.0;
   float wakeFresh = 0.0;
-  if (uWakeParams.w > 0.5) {
+  if (uWakeParams.w > 0.5 && px < 1.22) {
     // Warp the lookup in world space before sampling, to break the texel grid.
     //
     // The field is half a metre per texel, which a chase camera magnifies to

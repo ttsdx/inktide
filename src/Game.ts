@@ -107,7 +107,13 @@ export class Game {
     const adaptive = url.searchParams.get('adaptive') !== '0';
     this.showPerf = url.searchParams.get('perf') === '1';
 
-    this.engine = new Engine({ canvas, tier: tier ?? 'high', adaptive, maxPixelRatio: 2 });
+    this.engine = new Engine({
+      canvas,
+      tier: tier ?? 'high',
+      adaptive,
+      maxPixelRatio: 2,
+      preserveDrawingBuffer: url.searchParams.get('harness') === '1',
+    });
     this.input = new Input(canvas);
     this.rig = new CameraRig(this.engine.camera);
     this.sky = new Sky();

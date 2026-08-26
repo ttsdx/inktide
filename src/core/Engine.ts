@@ -12,6 +12,11 @@ export interface EngineOptions {
   tier?: QualityTier;
   /** Disable adaptive scaling (the screenshot harness pins quality). */
   adaptive?: boolean;
+  /**
+   * Keep the drawing buffer after composite. Required for `toDataURL` captures.
+   * On a real GPU it forces a copy every frame; play sessions leave it off.
+   */
+  preserveDrawingBuffer?: boolean;
 }
 
 /**
@@ -128,11 +133,14 @@ export class Engine {
       powerPreference: 'high-performance',
       stencil: false,
       depth: true,
-      preserveDrawingBuffer: true, // the screenshot harness reads the canvas
+      preserveDrawingBuffer: opts.preserveDrawingBuffer === true,
     });
     this.renderer.autoClear = true;
     this.renderer.setClearColor(0x0a1226, 1);
-    this.renderer.debug.checkShaderErrors = import.meta.env?.DEV ?? false;
+    // Validating every program on every compile hitch is a development
+    // convenience, not a frame. Shader errors still throw; we just skip the
+    // extra getProgramParameter round-trip on the 60 Hz path.
+    this.renderer.debug.checkShaderErrors = false;
 
     this.camera = new PerspectiveCamera(58, 1, 0.35, 4000);
     this.camera.position.set(0, 8, 24);

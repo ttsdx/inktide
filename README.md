@@ -167,7 +167,9 @@ are pulled when a frame runs long:
 Quality can be pinned with `?quality=low|medium|high|ultra` and adaptive scaling
 disabled with `?adaptive=0` (the screenshot harness does both). Add `?perf=1` to
 draw a live fps / tier / draw-call meter — that is how a real GPU answers
-whether the race holds 60 at retina.
+whether the race holds 60 at retina. The screenshot harness sets `harness=1`,
+which is the only mode that keeps the drawing buffer for `toDataURL`; a normal
+play session does not, because that copy is a full-frame blit every vsync.
 
 ## The screenshot harness
 
