@@ -162,7 +162,7 @@ const SHEET = `
   transform-origin: right center; animation-delay: 90ms;
 }
 
-.it-headline { display: block; }
+.it-headline { display: block; flex: 0 0 auto; width: auto; height: auto; max-width: 100%; }
 .it-headline.it-pop { animation: it-pop 420ms cubic-bezier(.16,1.5,.3,1) both; }
 
 .it-rule {
@@ -589,8 +589,8 @@ export class Screens {
 
   private launchTitle(): void {
     if (this.titleIndex === 0) {
-      this.onStartCircuit?.();
-      this.onStart?.();
+      if (this.onStartCircuit) this.onStartCircuit();
+      else this.onStart?.();
     } else {
       this.onStartRogue?.();
     }

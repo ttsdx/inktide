@@ -297,7 +297,11 @@ export class Hud {
       data.phase === 'racing' ||
       data.phase === 'finished' ||
       Boolean(data.rogue);
-    this.entrySpring.step(visible ? 1 : 0, dt);
+    // Snap off on title / jet shop so the circuit POS/LAP cluster cannot
+    // fade in over those overlays for the spring's decay. Results still ease.
+    if (visible) this.entrySpring.step(1, dt);
+    else if (data.phase === 'intro') this.entrySpring.snap(0);
+    else this.entrySpring.step(0, dt);
 
     this.speedSpring.step(player ? Math.max(0, player.speed) : 0, dt);
     // Boost charge is smoothed only lightly — it is a resource the player is

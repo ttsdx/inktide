@@ -1446,7 +1446,16 @@ export class Game {
 
     /** Race state, so a shot can assert it reached the moment it asked for. */
     raceState: () => ({
-      phase: this.session === 'title' ? 'intro' : this.director?.phase ?? 'intro',
+      phase:
+        this.session === 'title'
+          ? 'intro'
+          : this.session === 'rogue'
+            ? this.rogue?.phase === 'racing'
+              ? 'racing'
+              : this.rogue?.phase === 'runResults'
+                ? 'results'
+                : 'intro'
+            : (this.director?.phase ?? 'intro'),
       mode: this.session,
       specTopSpeed: this.player?.physics.spec.topSpeed ?? 0,
       countdown: this.director?.countdownValue ?? 0,
