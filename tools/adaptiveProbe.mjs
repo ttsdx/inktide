@@ -69,22 +69,7 @@ const report = await page.evaluate(() => {
   // Feeding the controller has to go through the same path the render loop
   // uses, or the test proves nothing about the real thing.
   const feed = (ms, frames) => {
-    for (let i = 0; i < frames; i++) {
-      const changed = eng.adaptive.push(ms);
-      if (changed) {
-        eng.pipeline.setQuality(
-          {
-            low: { pixelRatio: 1.0, samples: 0, bloom: false, interiorLines: false, bloomScale: 4 },
-            medium: { pixelRatio: 1.0, samples: 0, bloom: true, interiorLines: true, bloomScale: 4 },
-            high: { pixelRatio: 1.5, samples: 4, bloom: true, interiorLines: true, bloomScale: 3 },
-            ultra: { pixelRatio: 2.0, samples: 4, bloom: true, interiorLines: true, bloomScale: 2 },
-          }[eng.adaptive.tier],
-        );
-        eng.setTier?.length; // no-op guard
-        // applySize is private; resizing through the public path exercises it.
-        window.dispatchEvent(new Event('resize'));
-      }
-    }
+    for (let i = 0; i < frames; i++) eng.pumpAdaptive(ms);
   };
 
   out.trace.push(snap('start'));
@@ -158,6 +143,8 @@ const report = await page.evaluate(() => {
       bloom: eng.quality.bloom,
       interiorLines: eng.quality.interiorLines,
       drawCalls: s.drawCalls,
+      oceanTriangles: s.oceanTriangles,
+      wakeResolution: s.wakeResolution,
     };
   }
   return out;
@@ -231,12 +218,19 @@ check(
 );
 check(c.instancedMeshes > 0, 'instancing is in use', `${c.totalInstances} instances in ${c.instancedMeshes} draws`);
 
+check(
+  t.low.oceanTriangles < t.ultra.oceanTriangles && t.low.wakeResolution < t.ultra.wakeResolution,
+  'lower tiers drop ocean density and wake resolution',
+  `ocean ${t.ultra.oceanTriangles} -> ${t.low.oceanTriangles} tris, wake ${t.ultra.wakeResolution} -> ${t.low.wakeResolution}`,
+);
+
 console.log('\nQUALITY TIERS');
-console.log('  tier     pixelRatio  msaa  bloom  interiorLines  draws');
+console.log('  tier     pixelRatio  msaa  bloom  lines  draws  oceanTris  wake');
 for (const [t, v] of Object.entries(report.tiers)) {
   console.log(
     `  ${t.padEnd(8)} ${String(v.pixelRatio).padEnd(11)} ${String(v.samples).padEnd(5)} ` +
-      `${String(v.bloom).padEnd(6)} ${String(v.interiorLines).padEnd(14)} ${v.drawCalls}`,
+      `${String(v.bloom).padEnd(6)} ${String(v.interiorLines).padEnd(6)} ` +
+      `${String(v.drawCalls).padEnd(6)} ${String(v.oceanTriangles).padEnd(10)} ${v.wakeResolution}`,
   );
 }
 console.log(

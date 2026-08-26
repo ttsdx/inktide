@@ -211,10 +211,24 @@ export class Game {
     if (this.player) this.snapCameraToPlayer();
 
     this.engine.onUpdate(this.update);
+    this.engine.onQualityChange = (tier) => this.applyQuality(tier);
+    this.applyQuality(this.engine.adaptive.tier);
 
     // One warm-up frame so every shader is compiled before the first visible
     // frame — otherwise the first second of play is a compile stutter.
     this.engine.stepFixed(1 / 60);
+  }
+
+  /**
+   * Push the current quality tier into every system that has its own cost.
+   * The pipeline is already handled by Engine; this is ocean density, wake
+   * resolution, spray count, and how far a rider is allowed to stay visible.
+   */
+  private applyQuality(tier: QualityTier): void {
+    this.ocean.setQuality(tier);
+    this.wake?.setQuality(tier);
+    this.spray?.setQuality(tier);
+    this.riderLodDist = tier === 'low' ? 28 : tier === 'medium' ? 52 : tier === 'high' ? 80 : 120;
   }
 
   private buildRacers(): void {
@@ -457,11 +471,15 @@ export class Game {
       const target = finished ? 1 : 0;
       r.celebrate += (target - r.celebrate) * Math.min(1, 1.6 * dt);
 
-      r.pose = Rider.poseFromBoat(s, r.pose, dt, r.celebrate);
-      r.rider.update(r.pose, ctx);
-      // The bars belong to the boat and the hands belong to the rider, so the
-      // one signal that turns both has to be handed across here.
-      r.boat.setBarYaw(r.rider.barYaw);
+      // Off-screen and far-LOD riders skip the IK solve. The pose is derived
+      // from boat state in one pass; the expensive work is the layered spring
+      // + arm IK writing 21 bones. Physics, wake, and the minimap do not
+      // read any of it.
+      if (r.rider.root.visible) {
+        r.pose = Rider.poseFromBoat(s, r.pose, dt, r.celebrate);
+        r.rider.update(r.pose, ctx);
+        r.boat.setBarYaw(r.rider.barYaw);
+      }
 
       if (!s.airborne) {
         this.emitters.push({
@@ -589,9 +607,20 @@ export class Game {
     cam.updateMatrixWorld();
     this.frustumMatrix.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
     this.frustum.setFromProjectionMatrix(this.frustumMatrix);
-    for (const r of this.racers) {
+    const lodSq = this.riderLodDist * this.riderLodDist;
+    const eye = cam.position;
+    for (let i = 0; i < this.racers.length; i++) {
+      const r = this.racers[i];
       this.racerSphere.center.copy(r.physics.position);
-      r.boat.root.visible = this.frustum.intersectsSphere(this.racerSphere);
+      const inView = this.frustum.intersectsSphere(this.racerSphere);
+      r.boat.root.visible = inView;
+      // The player is always fully detailed when on screen: the chase cam sits
+      // close enough that a missing rider is a missing hero. AI boats past the
+      // lod distance are hulls — 44 rider meshes plus their ink shells, at a
+      // size where the character is already a few pixels tall.
+      const riderOn =
+        inView && (i === 0 || eye.distanceToSquared(r.physics.position) < lodSq);
+      r.rider.root.visible = riderOn;
     }
   }
 
@@ -600,6 +629,8 @@ export class Game {
   /** Harness only: hand the player's boat to an AI so a shot can reach the flag. */
   private autopilot = false;
   private playerAI: AIController | null = null;
+  /** Hide AI riders beyond this distance. Player stays fully detailed. */
+  private riderLodDist = 80;
   private hudCourse: HudCourse | null = null;
   private readonly curvatureAhead = new Float32Array(24);
   private readonly hudData: HudData = { phase: 'intro', player: null };
@@ -1056,6 +1087,9 @@ export class Game {
       tier: this.engine.adaptive.tier,
       drawCalls: this.engine.pipeline.stats.calls,
       triangles: this.engine.pipeline.stats.triangles,
+      oceanTriangles: this.ocean.triangleCount,
+      wakeResolution: this.wake?.size ?? 0,
+      riderLod: this.riderLodDist,
       programs: this.engine.renderer.info.programs?.length ?? 0,
       geometries: this.engine.renderer.info.memory.geometries,
       textures: this.engine.renderer.info.memory.textures,

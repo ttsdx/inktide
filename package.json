@@ -15,6 +15,7 @@
     "probe:course": "tsx tools/courseProbe.ts",
     "probe:sea": "tsx tools/seaStateSweep.ts",
     "probe:perf": "tsx tools/perfProbe.ts",
+    "probe:adaptive": "node tools/adaptiveProbe.mjs",
     "probe:rider": "tsx tools/riderProbe.ts",
     "probe:ink": "tsx tools/inkProbe.ts",
     "probe:uniforms": "tsx tools/uniformProbe.ts",

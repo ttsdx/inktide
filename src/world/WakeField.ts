@@ -235,6 +235,10 @@ export class WakeField implements GameSystem {
     return this.targets[this.current].texture;
   }
 
+  get size(): number {
+    return this.resolution;
+  }
+
   get centerX(): number {
     return this.centre.x;
   }
@@ -317,8 +321,8 @@ export class WakeField implements GameSystem {
         this.setUpdateRate(30);
         break;
       case 'high':
-        this.setResolution(1024);
-        this.setUpdateRate(60);
+        this.setResolution(512);
+        this.setUpdateRate(45);
         break;
       case 'ultra':
         this.setResolution(1024);

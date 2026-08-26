@@ -50,6 +50,49 @@ export interface GateOptions {
   floatRadius?: number;
   /** Colour of the arch glow. */
   glowColor?: typeof PALETTE.gateGlow;
+  /** Shared opaque materials. One kit for the whole field. */
+  kit?: GateKit;
+}
+
+/**
+ * The three cel materials every gate shares. Twelve copies of the same shader
+ * program was twelve compile-and-bind costs for a colour that never changes.
+ */
+export interface GateKit {
+  hull: CelMaterial;
+  collar: CelMaterial;
+  arch: CelMaterial;
+}
+
+export function makeGateKit(): GateKit {
+  return {
+    hull: new CelMaterial({
+      color: PALETTE.foam,
+      rampTint: PALETTE.skyMid,
+      rimColor: PALETTE.skyHigh,
+      rimStrength: 0.7,
+      specStrength: 0.5,
+      matcapStrength: 0.2,
+      name: 'GatePylon',
+    }),
+    collar: new CelMaterial({
+      color: PALETTE.warn,
+      rampTint: PALETTE.warn,
+      specStrength: 0.4,
+      matcapStrength: 0.16,
+      name: 'GateCollar',
+    }),
+    arch: new CelMaterial({
+      color: PALETTE.uiAmber,
+      rampTint: PALETTE.skyHorizon,
+      ambientWrap: 0.86,
+      rimColor: PALETTE.skyHaze,
+      rimStrength: 0.85,
+      specStrength: 0.5,
+      matcapStrength: 0.2,
+      name: 'GateArch',
+    }),
+  };
 }
 
 const blankSample = (): OceanSample => ({ height: 0, nx: 0, ny: 1, nz: 0, jacobian: 1 });
@@ -87,6 +130,8 @@ export class Gate {
   /** Smoothed roll so the gate lags the water instead of snapping to it. */
   private roll = 0;
   private pitch = 0;
+  private readonly ownsKit: boolean;
+  private readonly kit: GateKit;
 
   constructor(index: number, position: Vector3, tangent: Vector3, opts: GateOptions = {}) {
     this.index = index;
@@ -105,26 +150,11 @@ export class Gate {
     this.group.position.copy(this.centre);
     this.group.rotation.y = Math.atan2(this.tangent.x, this.tangent.z);
 
-    // Near-white mast over a red collar: the navigational-marker reading, and
-    // the only pairing that stays legible against a frame which is otherwise
-    // entirely cyan and blue. The warm sand it started as came back olive once
-    // the ramp's shadow band and the distance haze had both been through it.
-    const hullMat = new CelMaterial({
-      color: PALETTE.foam,
-      rampTint: PALETTE.skyMid,
-      rimColor: PALETTE.skyHigh,
-      rimStrength: 0.7,
-      specStrength: 0.5,
-      matcapStrength: 0.2,
-      name: 'GatePylon',
-    });
-    const collarMat = new CelMaterial({
-      color: PALETTE.warn,
-      rampTint: PALETTE.warn,
-      specStrength: 0.4,
-      matcapStrength: 0.16,
-      name: 'GateCollar',
-    });
+    this.ownsKit = !opts.kit;
+    this.kit = opts.kit ?? makeGateKit();
+    const hullMat = this.kit.hull;
+    const collarMat = this.kit.collar;
+    const archMat = this.kit.arch;
 
     for (const side of [-1, 1]) {
       const x = side * this.halfWidth;
@@ -169,33 +199,6 @@ export class Gate {
     // The arch. Built as a chord-sampled tube rather than a TorusGeometry
     // segment so the sag is a controllable catenary-ish curve and the ends land
     // exactly on the pylon tops at any half-width.
-    // Warm, not near-ink.
-    //
-    // The arch was painted `inkSoft`, which made it the heaviest black mass in
-    // any frame containing a gate — heavier than the hero boat's own contour,
-    // so a course marker out-ranked the racer in the reading order. It is also
-    // the only large object in the game that is neither sky nor water, so a
-    // warm tone both fixes the weight problem and turns gates into legible
-    // landmarks against an otherwise entirely blue frame.
-    //
-    // The arch is also the one object in the game that is routinely seen from
-    // directly underneath, from a boat passing through it, and the underside
-    // faces away from the only light there is. At the shipped ambient wrap the
-    // ramp bottoms out there and a captured frame had the largest object in it
-    // rendering as a black slab across the top of the screen. A high wrap
-    // lifts the shadow bands so the underside reads as amber in shade rather
-    // than as a hole, and a strong sky rim gives its lower edges the bounce
-    // they would really pick up off the water.
-    const archMat = new CelMaterial({
-      color: PALETTE.uiAmber,
-      rampTint: PALETTE.skyHorizon,
-      ambientWrap: 0.86,
-      rimColor: PALETTE.skyHaze,
-      rimStrength: 0.85,
-      specStrength: 0.5,
-      matcapStrength: 0.2,
-      name: 'GateArch',
-    });
     const arch = new Mesh(buildArch(this.halfWidth, height + 1.0, this.halfWidth * 0.26), archMat);
     this.group.add(arch);
 
@@ -247,6 +250,18 @@ export class Gate {
   update(ctx: FrameContext, eye: Vector3, fadeStart: number, fadeEnd: number): void {
     const t = ctx.elapsed;
     const dt = ctx.dt;
+
+    // Far gates are not drawn and not sampled. Three Gerstner solves each, on
+    // twelve gates, is cheap next to a boat — but the draw calls are not: each
+    // gate is a handful of meshes plus ink shells, and they were all submitted
+    // every frame from 3 km away. Hide past the water's own detail fade plus a
+    // small pad so a gate never pops in already floating.
+    const dist = Math.hypot(this.centre.x - eye.x, this.centre.z - eye.z);
+    if (dist > fadeEnd + 90) {
+      this.group.visible = false;
+      return;
+    }
+    this.group.visible = true;
 
     _side.copy(this.across);
     const lx = this.centre.x + _side.x * this.halfWidth;
@@ -332,6 +347,11 @@ export class Gate {
     });
     this.bannerMaterial.dispose();
     for (const m of this.lampMaterials) m.dispose();
+    if (this.ownsKit) {
+      this.kit.hull.dispose();
+      this.kit.collar.dispose();
+      this.kit.arch.dispose();
+    }
   }
 }
 
@@ -440,12 +460,15 @@ function finish(positions: number[], indices: number[]): BufferGeometry {
 export class GateField {
   readonly root = new Group();
   readonly gates: Gate[] = [];
+  private readonly kit: GateKit;
 
   constructor(course: Course, opts: GateOptions = {}) {
     this.root.name = 'Gates';
+    this.kit = opts.kit ?? makeGateKit();
     for (const cp of course.checkpoints) {
       const gate = new Gate(cp.index, cp.position, cp.tangent, {
         ...opts,
+        kit: this.kit,
         halfWidth: opts.halfWidth ?? gateHalfWidth(cp),
         // The start/finish gate is taller and reads in a different colour so it
         // is unmistakable from a kilometre away down the main straight.
@@ -474,6 +497,9 @@ export class GateField {
     for (const g of this.gates) g.dispose();
     this.gates.length = 0;
     this.root.clear();
+    this.kit.hull.dispose();
+    this.kit.collar.dispose();
+    this.kit.arch.dispose();
   }
 }
 

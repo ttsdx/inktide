@@ -106,6 +106,15 @@ export class Engine {
   private readonly updateFns: Array<(dt: number, elapsed: number) => void> = [];
   private lastPixelRatio = 0;
 
+  /**
+   * Fired after a tier or scale change has been written into the pipeline and
+   * the framebuffer. The ocean, the wake field and the spray all have their
+   * own quality knobs, and for a long time those knobs existed and were never
+   * turned — the adaptive controller only talked to the post chain. Anything
+   * that must move with the tier registers here.
+   */
+  onQualityChange: ((tier: QualityTier, scale: number) => void) | null = null;
+
   constructor(opts: EngineOptions) {
     this.maxPixelRatio = opts.maxPixelRatio ?? 2;
     this.baseTier = opts.tier ?? 'high';
@@ -146,9 +155,25 @@ export class Engine {
     this.baseTier = tier;
     this.adaptive.tier = tier;
     this.adaptive.scale = 1;
-    this.pipeline.setQuality(QUALITY_PRESETS[tier]);
     this.adaptive.reset();
+    this.commitQuality();
+  }
+
+  /**
+   * Push a synthetic frame time through the same path the render loop uses.
+   * The adaptive probe has to go through here: driving `pipeline.setQuality`
+   * by hand proved the presets existed, not that the controller reached them.
+   */
+  pumpAdaptive(dtMs: number): 'up' | 'down' | null {
+    const changed = this.adaptive.push(dtMs);
+    if (changed) this.commitQuality();
+    return changed;
+  }
+
+  private commitQuality(): void {
+    this.pipeline.setQuality(QUALITY_PRESETS[this.adaptive.tier]);
     this.applySize();
+    this.onQualityChange?.(this.adaptive.tier, this.adaptive.scale);
   }
 
   private handleResize = (): void => {
@@ -232,11 +257,7 @@ export class Engine {
 
     this.pipeline.render(this.scene, this.camera, this.elapsed);
 
-    const changed = this.adaptive.push(raw * 1000);
-    if (changed) {
-      this.pipeline.setQuality(QUALITY_PRESETS[this.adaptive.tier]);
-      this.applySize();
-    }
+    this.pumpAdaptive(raw * 1000);
   };
 
   dispose(): void {

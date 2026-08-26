@@ -147,16 +147,23 @@ metalness, no IBL and no cubemap probe anywhere in the project.
 
 ## Performance
 
-Targets 60 fps at retina resolution. The levers, in the order they are pulled:
+Targets 60 fps at retina on mid-range hardware. The levers, in the order they
+are pulled when a frame runs long:
 
 1. **Adaptive resolution.** A windowed median of frame time (not a mean — one GC
    spike should not drop a tier) moves the pixel ratio in small steps with a long
    cooldown, so the controller cannot oscillate.
-2. **Quality tiers** drop MSAA, then the interior-line pass, then bloom.
-3. **Instancing** for buoys and spray.
+2. **Quality tiers** drop MSAA, then the interior-line pass, then bloom. The same
+   callback also rebuilds the ocean disc coarser, shrinks the wake field, trims
+   spray, and hides distant AI riders.
+3. **Instancing** for buoys and spray; shared materials across all twelve gates.
 4. **LOD by construction.** The ocean's radial disc has exponentially-spaced
-   rings, so vertex density tracks 1/z without any discrete LOD level to pop, and
-   short wave detail is damped with distance to kill far-field shimmer.
+   rings, so vertex density tracks 1/z without a discrete pop, and short-wave
+   detail is damped with distance. Far gates skip their Gerstner solve and are
+   not submitted.
+
+Quality can be pinned with `?quality=low|medium|high|ultra` and adaptive scaling
+disabled with `?adaptive=0` (the screenshot harness does both).
 
 ## The screenshot harness
 

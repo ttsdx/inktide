@@ -81,6 +81,8 @@ export class Ocean {
   readonly mesh: Mesh;
   readonly material: ShaderMaterial;
   private readonly radius: number;
+  private segments: number;
+  private rings: number;
 
   /** Packed contact data: xyz = position, w = radius. */
   private contactA: Vector4[] = [];
@@ -89,10 +91,10 @@ export class Ocean {
 
   constructor(opts: OceanOptions = {}) {
     this.radius = opts.radius ?? 3200;
-    const segments = opts.segments ?? 384;
-    const rings = opts.rings ?? 132;
+    this.segments = opts.segments ?? 256;
+    this.rings = opts.rings ?? 100;
 
-    const geometry = buildRadialDisc(this.radius, segments, rings);
+    const geometry = buildRadialDisc(this.radius, this.segments, this.rings);
 
     for (let i = 0; i < MAX_CONTACTS; i++) {
       this.contactA.push(new Vector4(0, -999, 0, 1));
@@ -233,6 +235,7 @@ export class Ocean {
         uDetailFadeStart: { value: 110 },
         uDetailFadeEnd: { value: 760 },
       },
+      defines: {},
       vertexShader: OCEAN_VERT,
       fragmentShader: OCEAN_FRAG,
     });
@@ -290,35 +293,73 @@ export class Ocean {
    * water that scale with fill rate rather than vertex count, so they are what
    * the quality tiers move. The band structure never changes — dropping tiers
    * must not change the art direction, only the density of the detail on it.
+   *
+   * The disc itself also rebuilds. 384 × 132 is ~101k displaced triangles, all
+   * on screen, all running six Gerstner waves in the vertex shader. That is
+   * the right density at retina ultra; it is wasted work at a 1× medium frame,
+   * where the near rings already cover several pixels each. The exponential
+   * spacing is kept, only the sample count moves, so there is no LOD pop of
+   * the kind a clip-map would make — the surface is the same function, sampled
+   * coarser.
+   *
+   * `INK_TIER_LOW` is a compile-time strip of the glitter lattice. A uniform
+   * of zero still pays for the hashes; a define does not.
    */
   setQuality(tier: OceanQuality): void {
     const u = this.material.uniforms;
+    const defs = this.material.defines as Record<string, string | number>;
+    const wasLow = defs.INK_TIER_LOW !== undefined;
     switch (tier) {
       case 'low':
         u.uDetailStrength.value = 0.0;
-        u.uSparkleAmount.value = 0.55;
+        u.uSparkleAmount.value = 0.0;
         u.uDetailFadeStart.value = 55;
         u.uDetailFadeEnd.value = 340;
+        this.setDensity(128, 48);
+        defs.INK_TIER_LOW = 1;
         break;
       case 'medium':
         u.uDetailStrength.value = 0.6;
         u.uSparkleAmount.value = 0.85;
         u.uDetailFadeStart.value = 80;
         u.uDetailFadeEnd.value = 520;
+        this.setDensity(192, 72);
+        delete defs.INK_TIER_LOW;
         break;
       case 'high':
         u.uDetailStrength.value = 1.0;
         u.uSparkleAmount.value = 1.0;
         u.uDetailFadeStart.value = 110;
         u.uDetailFadeEnd.value = 760;
+        this.setDensity(256, 100);
+        delete defs.INK_TIER_LOW;
         break;
       case 'ultra':
         u.uDetailStrength.value = 1.0;
         u.uSparkleAmount.value = 1.0;
         u.uDetailFadeStart.value = 150;
         u.uDetailFadeEnd.value = 900;
+        this.setDensity(384, 132);
+        delete defs.INK_TIER_LOW;
         break;
     }
+    const isLow = defs.INK_TIER_LOW !== undefined;
+    if (isLow !== wasLow) this.material.needsUpdate = true;
+  }
+
+  /** Triangle count of the current disc. Used by the perf probe. */
+  get triangleCount(): number {
+    const idx = this.mesh.geometry.getIndex();
+    return idx ? idx.count / 3 : 0;
+  }
+
+  private setDensity(segments: number, rings: number): void {
+    if (segments === this.segments && rings === this.rings) return;
+    this.segments = segments;
+    this.rings = rings;
+    const next = buildRadialDisc(this.radius, segments, rings);
+    this.mesh.geometry.dispose();
+    this.mesh.geometry = next;
   }
 
   /**
@@ -1350,6 +1391,11 @@ void main() {
   float specRaw = pow(max(dot(N, H), 0.0), 64.0);
   float specGate = fixedStep(0.03, specRaw, 0.02);
 
+#ifdef INK_TIER_LOW
+  // Glitter lattice compiled out. The hashes per pixel were a measurable
+  // share of the fragment cost and contributed nothing once sparkle amount
+  // was already at zero.
+#else
   float bigGlint;
   // Scale the glint lattice with distance so a sparkle stays roughly the same
   // size on screen.
@@ -1366,6 +1412,7 @@ void main() {
   float glint = glitter(p, uTime, uSparkleDensity / glintOctave, bigGlint);
   float glitterMask = (glint * 0.6 + bigGlint * 1.0) * specGate * uSparkleAmount * detail;
   col += glitterMask * uSunTint * 0.85 * (1.0 - foamEdge);
+#endif
 
   // The broad sun path. Two discrete steps, and each step is an ocean-family
   // colour rather than white: mixing towards white over blue gave the pale
