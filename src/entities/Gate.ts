@@ -667,6 +667,7 @@ export class GateField {
       for (let o = 0; o < this.overlays.length; o++) {
         const mesh = this.overlays[o];
         mesh.count = shown;
+        mesh.visible = shown > 0;
         mesh.instanceMatrix.needsUpdate = true;
         this.overlayGlow[o].needsUpdate = true;
       }
