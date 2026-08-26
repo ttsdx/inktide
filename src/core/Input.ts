@@ -202,20 +202,20 @@ export class Input {
       return s;
     }
 
-    let steerTarget = (this.keys.right ? 1 : 0) - (this.keys.left ? 1 : 0);
+    let steerTarget = (this.keys.left ? 1 : 0) - (this.keys.right ? 1 : 0);
     let throttleTarget = this.keys.up ? 1 : 0;
     let brake = this.keys.down ? 1 : 0;
     let drift = this.keys.drift;
 
     if (this.touchActive) {
-      steerTarget = this.touchSteer;
+      steerTarget = -this.touchSteer;
       throttleTarget = Math.max(throttleTarget, this.touchThrottle);
     }
 
     const pad = this.gamepadIndex !== null ? navigator.getGamepads?.()[this.gamepadIndex] : null;
     if (pad) {
       const ax = pad.axes[0] ?? 0;
-      if (Math.abs(ax) > 0.14) steerTarget = ax;
+      if (Math.abs(ax) > 0.14) steerTarget = -ax;
       const rt = pad.buttons[7]?.value ?? 0;
       const lt = pad.buttons[6]?.value ?? 0;
       if (rt > 0.03) throttleTarget = rt;

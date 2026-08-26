@@ -139,8 +139,9 @@ export class RacingLine {
       uChevronSpeed: { value: 15 },
       /** Fraction of each period the chevron ink covers. */
       uChevronDuty: { value: 0.42 },
-      /** Sweep-back of the arrowhead, in chevron periods across the half-width. */
-      uChevronSkew: { value: 0.34 },
+      /** Sweep-back of the arrowhead, in chevron periods across the half-width.
+       *  Negative so the V opens along the race (tips point with travel). */
+      uChevronSkew: { value: -0.34 },
 
       uPlayerT: { value: 0 },
       uPreviewSpan: { value: this.previewDistance / course.length },
