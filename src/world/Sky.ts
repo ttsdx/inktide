@@ -47,7 +47,7 @@ export class Sky {
     this.group.frustumCulled = false;
 
     // --- dome ---------------------------------------------------------------
-    const domeGeo = new SphereGeometry(1, 48, 32);
+    const domeGeo = new SphereGeometry(1, 32, 20);
     this.domeMat = new ShaderMaterial({
       name: 'SkyDome',
       glslVersion: GLSL3,

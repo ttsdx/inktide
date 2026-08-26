@@ -239,7 +239,7 @@ export class Game {
     this.sky.setQuality(tier);
     this.hud?.setQuality(tier);
     this.riderLodDist = tier === 'low' ? 28 : tier === 'medium' ? 52 : tier === 'high' ? 80 : 120;
-    if (this.racingLine) this.racingLine.glow.visible = tier !== 'low';
+    if (this.racingLine) this.racingLine.glow.visible = tier === 'ultra';
   }
 
   private buildRacers(): void {
