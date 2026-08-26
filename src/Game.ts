@@ -233,6 +233,7 @@ export class Game {
    */
   private applyQuality(tier: QualityTier, _scale = 1): void {
     this.ocean.setQuality(tier);
+    this.ocean.setLodPx(this.engine.pixelRatio);
     this.wake?.setQuality(tier);
     this.spray?.setQuality(tier);
     this.racingLine?.setQuality(tier);
@@ -555,6 +556,7 @@ export class Game {
     }
 
     this.ocean.setContacts(this.contacts);
+    this.ocean.setLodPx(this.engine.pixelRatio);
     this.spray?.update(ctx);
     this.probe?.update(elapsed);
     this.waterline?.update(elapsed);

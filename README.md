@@ -160,7 +160,9 @@ are pulled when a frame runs long:
    Low drops both post passes. The same callback also rebuilds the
    ocean disc coarser, shrinks the wake field, trims spray, and hides distant
    AI riders. HUD canvas density follows the same ladder (1× on low/medium,
-   2× on high and ultra). Low hides the cloud dome overdraw entirely.
+   2× on high and ultra). Low hides the cloud dome overdraw entirely. Ocean
+   feature LOD (ripple, foam, hull contact) is measured in CSS pixels, so a 2×
+   framebuffer sharpens bands without evaluating extra octaves.
 3. **Instancing** for buoys, spray, and the regular gate shells (collar, mast,
    arch, plus ink). The unique start/finish gate stays a mesh. Overlay lamps
    and banners stay per-gate because they pulse. Rider suit/gear/skin/visor

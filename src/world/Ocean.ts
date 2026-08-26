@@ -117,6 +117,13 @@ export class Ocean {
         uWakeParams: { value: new Vector4(0, 0, 260, 0) },
         uSceneDepth: { value: null as Texture | null },
         uResolution: { value: new Vector2(1, 1) },
+        /**
+         * Framebuffer pixel ratio. Feature LOD (ripple, foam, glitter, hull
+         * foam) is measured in CSS pixels so a 2× target does not unlock extra
+         * octaves — it only sharpens the bands. Band anti-alias still uses the
+         * device footprint so retina edges stay 1 px soft.
+         */
+        uLodPx: { value: 1 },
         uCameraNear: { value: 0.35 },
         uCameraFar: { value: 4000 },
         uContactA: { value: this.contactA },
@@ -320,6 +327,7 @@ export class Ocean {
         u.uDetailFadeEnd.value = 340;
         this.setDensity(128, 48);
         defs.INK_TIER_LOW = 1;
+        u.uLodPx.value = 1;
         break;
       case 'medium':
         u.uDetailStrength.value = 0.6;
@@ -328,6 +336,7 @@ export class Ocean {
         u.uDetailFadeEnd.value = 520;
         this.setDensity(192, 72);
         defs.INK_TIER_MED = 1;
+        u.uLodPx.value = 1;
         break;
       case 'high':
         u.uDetailStrength.value = 1.0;
@@ -336,6 +345,7 @@ export class Ocean {
         u.uDetailFadeEnd.value = 760;
         this.setDensity(192, 72);
         defs.INK_TIER_HIGH = 1;
+        u.uLodPx.value = 2;
         break;
       case 'ultra':
         u.uDetailStrength.value = 1.0;
@@ -343,10 +353,20 @@ export class Ocean {
         u.uDetailFadeStart.value = 150;
         u.uDetailFadeEnd.value = 900;
         this.setDensity(384, 132);
+        u.uLodPx.value = 1;
         break;
     }
     const after = `${defs.INK_TIER_LOW ?? ''}|${defs.INK_TIER_MED ?? ''}|${defs.INK_TIER_HIGH ?? ''}`;
     if (after !== before) this.material.needsUpdate = true;
+  }
+
+  /**
+   * Feature LOD is measured in CSS pixels. Pass the live framebuffer pixel
+   * ratio so adaptive scale and retina stay honest: 2× does not evaluate
+   * octaves that 1× would have already rejected.
+   */
+  setLodPx(pixelRatio: number): void {
+    this.material.uniforms.uLodPx.value = Math.max(0.5, pixelRatio);
   }
 
   /** Triangle count of the current disc. Used by the perf probe. */
@@ -615,6 +635,7 @@ uniform sampler2D uWakeField;
 uniform vec4 uWakeParams;
 uniform sampler2D uSceneDepth;
 uniform vec2 uResolution;
+uniform float uLodPx;
 uniform float uCameraNear;
 uniform float uCameraFar;
 
@@ -904,12 +925,14 @@ void main() {
   // -----------------------------------------------------------------------
   // 0. SURFACE NORMAL
   // -----------------------------------------------------------------------
-  // World-space width of this pixel. Every scale-dependent decision below is
-  // made against it rather than against distance, because distance is the
-  // wrong variable: a pixel forty metres away in a top-down shot and a pixel
-  // forty metres away in a grazing shot cover wildly different amounts of
-  // water, and it is the amount of water that decides what can be resolved.
-  float px = max(length(fwidth(p)), 1e-4);
+  // World-space width of this pixel. Every scale-dependent *feature* below is
+  // made against CSS pixels (the px variable), not device pixels: a 2x buffer would
+  // otherwise unlock extra ripple octaves, foam hashes and hull-contact loops
+  // that 1× already rejected, which is four times the fill paying more ALU
+  // each. Band anti-alias (hardStep / bandStepAA) still uses the device
+  // footprint so retina edges stay one device-pixel soft.
+  float pxDev = max(length(fwidth(p)), 1e-4);
+  float px = pxDev * max(uLodPx, 0.5);
 
   /**
    * THE PRE-FILTER.
@@ -930,7 +953,7 @@ void main() {
    * which is what the reference art does anyway — a background painter does not
    * render every wave at the horizon, they paint one flat shape.
    */
-  float resolve = 1.0 - smoothstep(0.35, 2.2, px);
+  float resolve = 1.0 - smoothstep(0.35, 2.2, pxDev);
 
   // The detail multiplier gets a far more generous curve than the pre-filter,
   // although the two were originally one value.
