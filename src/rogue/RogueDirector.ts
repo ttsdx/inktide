@@ -219,6 +219,11 @@ export class RogueDirector {
     return timePointsFor(this.stageTime, this.par) + this.stageOrbs * ROGUE_ORB_POINTS;
   }
 
+  /** Confirmed orb score only — live time payout is not earned until the line. */
+  get orbPointsThisStage(): number {
+    return this.stageOrbs * ROGUE_ORB_POINTS;
+  }
+
   /** Begin a fresh run from stock Vermillion. */
   startRun(seed: number): void {
     this.seed = seed >>> 0 || 1;
@@ -301,7 +306,7 @@ export class RogueDirector {
       remaining: this.remaining,
       target: this.target,
       stageTime: this.stageTime,
-      pointsThisStage: this.pointsThisStage,
+      pointsThisStage: this.orbPointsThisStage,
       runPoints: this.runPoints,
       par: this.par,
       orbsThisStage: this.stageOrbs,

@@ -1443,6 +1443,7 @@ export class Game {
     raceState: () => ({
       phase: this.session === 'title' ? 'intro' : this.director?.phase ?? 'intro',
       mode: this.session,
+      specTopSpeed: this.player?.physics.spec.topSpeed ?? 0,
       countdown: this.director?.countdownValue ?? 0,
       standings: (this.director?.standings() ?? []).map((p) => ({
         boat: BOAT_SPECS[p.boatId].name,

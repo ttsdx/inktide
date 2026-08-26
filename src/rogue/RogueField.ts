@@ -438,14 +438,16 @@ function placeHazards(
 ): void {
   const lanes = 3;
   const laneX = (i: number) => ((i - 1) / 1) * half * 0.55;
-  const rowGap = [34, 22, 14][stage] ?? 14;
-  const blockCount = stage === 0 ? 1 : stage === 1 ? 2 : 2;
-  let open = Math.floor(rng() * lanes);
-  let z = oz + 55;
+  const rowGap = [38, 24, 15][stage] ?? 15;
+  const blockCount = stage === 0 ? 1 : 2;
+  // Stage 1 teaches: keep the centre lane open and weave gently. Stage 3
+  // jogs the hole so a straight blast is no longer a line.
+  let open = stage === 0 ? 1 : Math.floor(rng() * lanes);
+  let z = oz + (stage === 0 ? 90 : 55);
   const end = oz + length - 28;
   let row = 0;
   while (z < end) {
-    if (rng() < 0.38 + stage * 0.12) {
+    if (rng() < (stage === 0 ? 0.16 : 0.38 + stage * 0.1)) {
       open = Math.max(0, Math.min(lanes - 1, open + (rng() < 0.5 ? -1 : 1)));
     }
     const blocked: number[] = [];
@@ -453,7 +455,7 @@ function placeHazards(
     while (blocked.length > blockCount) blocked.splice(Math.floor(rng() * blocked.length), 1);
     // Stage 1 sometimes leaves a row empty so the first minute teaches the
     // corridor rather than the clutter.
-    const skipRow = stage === 0 && rng() < 0.28;
+    const skipRow = stage === 0 && rng() < 0.42;
     if (!skipRow) {
       for (const li of blocked) {
         const kind = pickKind(rng, stage);
@@ -500,12 +502,15 @@ function placePickups(
   length: number,
   half: number,
 ): void {
-  const orbGap = [28, 42, 64][stage] ?? 64;
+  const orbGap = [22, 42, 64][stage] ?? 64;
   const boostOdds = [0.22, 0.14, 0.08][stage] ?? 0.08;
   let z = oz + 40;
   const end = oz + length - 20;
   while (z < end) {
-    const x = ox + (rng() - 0.5) * half * 1.15;
+    // Stage 1 hangs orbs on the open centre line so a first run can actually
+    // bank a shop visit. Later stages scatter them into the clutter.
+    const x =
+      stage === 0 ? ox + (rng() - 0.5) * 6 : ox + (rng() - 0.5) * half * 1.15;
     if (Math.abs(x - ox) < half * 0.92) {
       if (rng() < boostOdds) field.pushPickup('boost', x, z, 0.85 + rng() * 0.2);
       else field.pushPickup('orb', x, z, 0.75 + rng() * 0.2);
