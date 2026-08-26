@@ -74,6 +74,8 @@ const COOLDOWN: Partial<Record<SfxName, number>> = {
   boostCharged: 0.5,
   uiMove: 0.04,
   countdownBeep: 0.3,
+  pickup: 0.08,
+  hazardHit: 0.11,
 };
 
 interface AudioWindow {
@@ -295,6 +297,12 @@ export class AudioEngine implements AudioBus {
           break;
         case 'uiConfirm':
           this.sting([5, 12], 0.06, 0.14, 0.18 * g, 'square');
+          break;
+        case 'pickup':
+          this.sting([9, 12, 16], 0.04, 0.12, 0.16 * g, 'triangle');
+          break;
+        case 'hazardHit':
+          this.impact(true, g * 1.35);
           break;
       }
     } catch {

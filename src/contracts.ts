@@ -42,6 +42,9 @@ export interface WaterSample {
 // Boats
 // ---------------------------------------------------------------------------
 
+/** Which player-facing mode is live. Circuit is the shipped 3-lap race. */
+export type GameMode = 'circuit' | 'rogue';
+
 /** Static per-boat tuning. Distinct hulls can trade top speed against grip. */
 export interface BoatSpec {
   name: string;
@@ -57,6 +60,20 @@ export interface BoatSpec {
   mass: number;
   /** 0..1 how much lateral velocity is preserved in a slide. */
   slidiness: number;
+  /**
+   * Multiplier on how fast a drift fills the boost meter. Omit for 1.
+   * Rogue upgrades write this; circuit specs leave it unset.
+   */
+  boostChargeMul?: number;
+  /** Multiplier on boost duration once fired. Omit for 1. */
+  boostWindowMul?: number;
+  /**
+   * Multiplier on post-impact control loss. Below 1 recovers faster.
+   * Omit for 1.
+   */
+  stunMul?: number;
+  /** Metres of pickup magnet radius. Omit for 0 (touch only). */
+  magnetRadius?: number;
 }
 
 /**
@@ -165,6 +182,13 @@ export interface CoursePoint {
 
 export type RacePhase = 'intro' | 'countdown' | 'racing' | 'finished' | 'results';
 
+/**
+ * Overlay screens that are not a circuit race phase.
+ * Title sits on `intro` for the circuit director; rogue uses these for the
+ * between-stage shop and the run recap so HUD/screens can share one union.
+ */
+export type RoguePhase = 'racing' | 'upgrade' | 'runResults';
+
 export interface RacerProgress {
   boatId: number;
   lap: number;
@@ -245,7 +269,9 @@ export type SfxName =
   | 'wrongWay'
   | 'finish'
   | 'uiMove'
-  | 'uiConfirm';
+  | 'uiConfirm'
+  | 'pickup'
+  | 'hazardHit';
 
 export interface AudioBus {
   /** Per-frame continuous state for the engine and water-rush layers. */

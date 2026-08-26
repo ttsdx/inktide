@@ -20,6 +20,13 @@ export interface ControlState {
   cameraPressed: boolean;
   pausePressed: boolean;
   anyPressed: boolean;
+  /** Enter / gamepad south face. Edge-triggered. */
+  confirmPressed: boolean;
+  /**
+   * Menu highlight step, edge-triggered: -1 up/left, +1 down/right, 0 none.
+   * Consumed by title / upgrade / pause overlays; ignored while racing.
+   */
+  menuDelta: number;
 }
 
 const KEY_MAP: Record<string, keyof RawKeys> = {
@@ -63,6 +70,8 @@ export class Input {
     cameraPressed: false,
     pausePressed: false,
     anyPressed: false,
+    confirmPressed: false,
+    menuDelta: 0,
   };
 
   /**
@@ -83,7 +92,17 @@ export class Input {
     pause: false,
     confirm: false,
   };
-  private edge = { reset: false, camera: false, pause: false, confirm: false, any: false };
+  private edge = {
+    reset: false,
+    camera: false,
+    pause: false,
+    confirm: false,
+    any: false,
+    menu: 0,
+  };
+  private padConfirmHeld = false;
+  private padPauseHeld = false;
+  private padMenuHeld = false;
 
   /** Smoothed analogue steer so keyboard input is not a square wave. */
   private steerSmooth = 0;
@@ -114,6 +133,8 @@ export class Input {
       if (k === 'camera') this.edge.camera = true;
       if (k === 'pause') this.edge.pause = true;
       if (k === 'confirm') this.edge.confirm = true;
+      if (k === 'up' || k === 'left') this.edge.menu = -1;
+      if (k === 'down' || k === 'right') this.edge.menu = 1;
       this.edge.any = true;
     }
     this.keys[k] = true;
@@ -197,6 +218,8 @@ export class Input {
         cameraPressed: false,
         pausePressed: false,
         anyPressed: false,
+        confirmPressed: false,
+        menuDelta: 0,
       });
       Object.assign(s, this.scripted);
       return s;
@@ -221,7 +244,19 @@ export class Input {
       if (rt > 0.03) throttleTarget = rt;
       if (lt > 0.03) brake = Math.max(brake, lt);
       if (pad.buttons[0]?.pressed) drift = true;
-      if (pad.buttons[9]?.pressed) this.edge.pause = true;
+      const south = pad.buttons[0]?.pressed === true;
+      if (south && !this.padConfirmHeld) this.edge.confirm = true;
+      this.padConfirmHeld = south;
+      const startBtn = pad.buttons[9]?.pressed === true;
+      if (startBtn && !this.padPauseHeld) this.edge.pause = true;
+      this.padPauseHeld = startBtn;
+      // D-pad: 12 up, 13 down, 14 left, 15 right. Edge only, so a hold
+      // cannot rattle the title highlight every frame.
+      const padUp = pad.buttons[12]?.pressed === true || pad.buttons[14]?.pressed === true;
+      const padDown = pad.buttons[13]?.pressed === true || pad.buttons[15]?.pressed === true;
+      const padMenu = padUp || padDown;
+      if (padMenu && !this.padMenuHeld) this.edge.menu = padUp ? -1 : 1;
+      this.padMenuHeld = padMenu;
     }
 
     // Steering ramps fast into a turn and snaps back quicker on release, which
@@ -237,6 +272,8 @@ export class Input {
     s.resetPressed = this.edge.reset;
     s.cameraPressed = this.edge.camera;
     s.pausePressed = this.edge.pause;
+    s.confirmPressed = this.edge.confirm;
+    s.menuDelta = this.edge.menu;
     s.anyPressed = this.edge.any || this.edge.confirm;
     s.boostPressed = false;
 
@@ -245,6 +282,7 @@ export class Input {
     this.edge.pause = false;
     this.edge.confirm = false;
     this.edge.any = false;
+    this.edge.menu = 0;
     return s;
   }
 
