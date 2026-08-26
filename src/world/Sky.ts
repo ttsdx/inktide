@@ -289,18 +289,66 @@ void main() {
 
   vec3 col = bandedSky(t, wobble, horizonCol);
 
-  // A warm collar around the sun, quantised into two steps.
+  // THE GLARE AROUND THE SUN.
   //
-  // Quantising a radial falloff draws its own step boundaries as concentric
-  // rings, and the only thing that decides whether those read as light or as a
-  // lens artefact is how big they are. An exponent of 30 over three steps put
-  // the outer ring 15 degrees off the sun — a 340 px disc at this field of
-  // view, plainly visible as a hard-edged grey circle pasted on the sky. At
-  // 150 over two steps the outer edge sits about 5 degrees out, inside the
-  // glare where a step belongs.
-  float sd = max(dot(d, normalize(uSunDir)), 0.0);
-  float tight = floor(pow(sd, 150.0) * 2.0 + 0.2) / 2.0;
-  col = mix(col, ${glslVec3(PALETTE.sun)}, tight * 0.6);
+  // Two things decide whether a quantised radial falloff reads as light or as
+  // a disc pasted on the sky: whether crossing it costs saturation or buys
+  // brightness, and whether its *outermost* boundary is a step.
+  //
+  // Both used to be wrong. The collar was applied as a mix towards the cream
+  // sun colour, and mixing a pale colour into a saturated blue moves it
+  // towards the neutral axis: measured across the old step, the collar held
+  // the sky's own brightness at a third of its saturation. It paid chroma and
+  // got nothing back, which is the definition of a grey veil. It is now added
+  // in gold, so every band is brighter *and* warmer than the sky under it.
+  //
+  // The size problem is not solved by shrinking the falloff — that was tried
+  // twice, at exponents of 30 and then 150, and each time it just produced a
+  // smaller hard-edged circle. The fix is to accept that a step boundary is
+  // only legible as drawn light when it sits close enough to the disc to be
+  // read as part of the same stamp. So the bands are confined to a few degrees
+  // and the outermost one is faded out rather than stepped out, and the broad
+  // atmospheric scatter beyond them carries no steps at all. Working in true
+  // angles rather than a power of the cosine is what makes those distances
+  // something that can be reasoned about instead of tuned blind.
+  float sunAng = acos(clamp(dot(d, normalize(uSunDir)), -1.0, 1.0));
+
+  // The drawn glare. Three bands out to 7 degrees; the sun stamp's own disc is
+  // opaque out to 3.4, so the innermost band is hidden behind it and the one
+  // visible hard edge lands at 4.3 degrees — a ring hugging the disc.
+  float glare = 1.0 - smoothstep(0.0, 0.122, sunAng);
+  float bands = ceil(glare * 3.0) / 3.0;
+  // The outer band's own edge is dissolved, so the glare has no perimeter to
+  // draw. The interior boundaries keep their hard cel step because this
+  // envelope has already reached 1 by the time it meets them.
+  float outerFade = smoothstep(0.0, 0.34, glare);
+
+  // Atmospheric scatter: smooth and never quantised, which is what lets the
+  // warmth reach past the bands without drawing a perimeter. Its falloff is
+  // kept tight — a nine-degree e-fold measured out to a saturation of 0.50 at
+  // ten degrees off the sun, which bleached most of the visible sky rather
+  // than haloing the disc. The sky has to stay a saturated cyan everywhere the
+  // sun is not.
+  float scatter = exp(-sunAng * 10.5);
+
+  // The glare is mixed towards a gold held well above 1.0, which is the whole
+  // trick and worth stating plainly, because two obvious alternatives both
+  // fail on this sky.
+  //
+  // Mixing towards an in-range colour is what produced the grey veil: cream at
+  // 0.6 lands on the sky's own brightness, so the region pays its chroma and
+  // buys nothing. Adding light instead does brighten, but the sky's blue is
+  // already at 0.82, so blue and green hit the clamp while red still has
+  // headroom and the glow comes out cyan-white — colder than what it replaced.
+  //
+  // Mixing towards an over-bright gold does both jobs at once. It carries the
+  // sky's own colour out of the region rather than piling more light on top of
+  // it, so nothing clips on the way, and because the target is brighter than
+  // the sky the result climbs in value as it warms. Measured across the ramp
+  // this puts red above blue within four degrees of the disc, which is the
+  // first time this glare has actually been warm rather than merely pale.
+  float amt = clamp(bands * outerFade * 0.45 + scatter * 0.40, 0.0, 0.9);
+  col = mix(col, ${glslVec3(PALETTE.sunGlow)} * 1.55, amt);
 
   // A single hard haze band riding the horizon line, which gives the ocean
   // something to meet instead of fading into nothing.
@@ -497,6 +545,7 @@ uniform float uTime;
 
 const vec3 CORE = ${glslVec3(PALETTE.sunCore)};
 const vec3 GLOW = ${glslVec3(PALETTE.sun)};
+const vec3 GOLD = ${glslVec3(PALETTE.sunGlow)};
 
 /**
  * One set of hard-edged, radially tapering rays.
@@ -522,8 +571,16 @@ void main() {
 
   // A solid core that runs straight into its warm collar with no gap. An
   // earlier build separated the disc from its ring, which read as an eyeball.
+  //
+  // Three bands, not two, and each is wider than it needs to look on paper.
+  // The bloom pass spreads the blown-out core outwards by something like
+  // eighteen pixels, so a collar sized to look right in isolation is simply
+  // eaten: the previous 0.148-to-0.196 collar survived as a six-pixel cream
+  // sliver, and once the sky behind it was brightened it vanished entirely.
+  // The bands have to be built with that erosion already accounted for.
   float core = 1.0 - smoothstep(0.138, 0.148, r);
-  float collar = 1.0 - smoothstep(0.186, 0.196, r);
+  float collar = 1.0 - smoothstep(0.206, 0.216, r);
+  float ring = 1.0 - smoothstep(0.268, 0.278, r);
 
   // There is deliberately no halo disc on this quad. Quantising a radial
   // falloff into steps produced concentric hard-edged rings that read as a UI
@@ -550,8 +607,16 @@ void main() {
   float rayFade = 1.0 - smoothstep(0.30, 0.48, r);
   float star = max(longRays, shortRays) * step(0.10, r) * rayFade;
 
-  float a = clamp(core + collar * 0.92 + star * 0.62, 0.0, 1.0);
-  vec3 col = mix(GLOW, CORE, clamp(core + collar * 0.5 + star * 0.25, 0.0, 1.0));
+  // Colour assigned per band rather than by blending the masks together. The
+  // old line interpolated towards white using 'core + collar * 0.5', which
+  // dragged the collar halfway to white everywhere it existed — so the band
+  // that was supposed to carry the sun's warmth measured (255,251,233), a
+  // cream in name only. Nesting the mixes keeps each band its own colour and
+  // gives the stamp the temperature ramp it always claimed to have: white at
+  // the centre, cream around it, gold at the edge handing off to the sky.
+  float a = clamp(core + collar * 0.95 + ring * 0.5 + star * 0.62, 0.0, 1.0);
+  vec3 col = mix(GOLD, GLOW, max(collar, star * 0.75));
+  col = mix(col, CORE, core);
 
   outColor = vec4(col * a, a);
   outNormalDepth = vec4(0.0, 0.0, 0.0, 1.0);

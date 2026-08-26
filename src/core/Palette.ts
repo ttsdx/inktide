@@ -52,6 +52,27 @@ export const PALETTE = {
   skyHaze: hex(0xd6eef8),
   sun: hex(0xfff8d4),
   sunCore: hex(0xffffff),
+  /**
+   * The glare around the sun, deliberately far warmer than the disc itself.
+   *
+   * The atmospheric collar used to be drawn by mixing `sun` — a near-white
+   * cream — into the sky. Mixing towards a colour no brighter than what is
+   * already there is a move towards the neutral axis and nothing else, so the
+   * collar lost the sky's chroma without gaining any brightness in exchange:
+   * measured across the step it held the sky's own value of 0.85 at a
+   * saturation of 0.35 against the sky's 0.96. A region that is no brighter
+   * than its surroundings and simply less colourful is a grey veil, which is
+   * exactly how it read.
+   *
+   * This colour is used as a mix target scaled above 1.0, so the sky is
+   * carried towards something genuinely brighter than itself. Its blue content
+   * is kept low for the same reason the scaling exists: the sky's blue sits at
+   * 0.82, and any treatment that pushes channels upward independently runs
+   * blue and green into the clamp while red still has headroom, inverting the
+   * ratio between them. An earlier attempt did precisely that and turned the
+   * ring outside the disc cyan-white — colder than the cream it replaced.
+   */
+  sunGlow: hex(0xffb84d),
   cloudLit: hex(0xffffff),
   cloudMid: hex(0xd9ecfb),
   cloudShade: hex(0x9dc6e8),
