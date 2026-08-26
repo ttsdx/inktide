@@ -57,8 +57,8 @@ import type { FrameContext } from '../contracts.ts';
  * iterations plus a six-wave evaluation — around 24 wave evaluations. 140 of
  * those every frame is ~3400, which is affordable but pointless: a buoy 800 m
  * away moves less than a pixel per frame. So buoys inside `NEAR_RADIUS` update
- * every frame, buoys out to `FAR_RADIUS` update on a round-robin, and buoys
- * past that keep whatever matrix they last had.
+ * every frame, farther ones update on a round-robin, and buoys past the water
+ * detail fade are packed out of the instance list so they are not submitted.
  */
 
 /** Radial segments in the buoy's body of revolution. Odd, so it reads as hand-cut. */
@@ -207,7 +207,11 @@ export class BuoyField {
     this.root.add(this.ink, this.body, this.lamps);
 
     // Seed every matrix once so nothing is at the origin on frame zero.
-    for (let i = 0; i < this.count; i++) this.writeInstance(i, 0, 1);
+    for (let i = 0; i < this.count; i++) {
+      this.simulate(i, 0, 1);
+      this.composeMatrix(i);
+      this.body.setMatrixAt(i, _m);
+    }
     this.body.instanceMatrix.needsUpdate = true;
   }
 
@@ -243,61 +247,54 @@ export class BuoyField {
   update(ctx: FrameContext): void {
     this.frame++;
     const near2 = NEAR_RADIUS * NEAR_RADIUS;
-    const far2 = FAR_RADIUS * FAR_RADIUS;
-    let wrote = false;
+    const hide2 = (this.fadeEnd + 80) * (this.fadeEnd + 80);
+    let written = 0;
 
     for (let i = 0; i < this.count; i++) {
-      const dx = this.baseX[i] - this.focus.x;
-      const dz = this.baseZ[i] - this.focus.z;
+      const dx = this.baseX[i] - this.eye.x;
+      const dz = this.baseZ[i] - this.eye.z;
       const d2 = dx * dx + dz * dz;
+      if (d2 > hide2) continue;
 
       let dt = ctx.dt;
+      let sample = true;
       if (d2 > near2) {
-        if (d2 > far2) continue;
-        if ((this.frame + i) % FAR_STRIDE !== 0) continue;
-        // A round-robin buoy sees FAR_STRIDE frames of water motion at once, so
-        // its smoothing has to advance by the same amount or it lags visibly
-        // whenever the player drives past.
-        dt = ctx.dt * FAR_STRIDE;
+        if ((this.frame + i) % FAR_STRIDE !== 0) sample = false;
+        else dt = ctx.dt * FAR_STRIDE;
       }
-
-      this.writeInstance(i, ctx.elapsed, dt);
-      wrote = true;
+      if (sample) this.simulate(i, ctx.elapsed, dt);
+      this.composeMatrix(i);
+      this.body.setMatrixAt(written, _m);
+      written++;
     }
 
-    if (wrote) this.body.instanceMatrix.needsUpdate = true;
+    this.body.count = written;
+    this.ink.count = written;
+    this.lamps.count = written;
+    if (written > 0) this.body.instanceMatrix.needsUpdate = true;
   }
 
-  private writeInstance(i: number, elapsed: number, dt: number): void {
+  private simulate(i: number, elapsed: number, dt: number): void {
     const x = this.baseX[i];
     const z = this.baseZ[i];
     const detail = detailAt(Math.hypot(x - this.eye.x, z - this.eye.z), this.fadeStart, this.fadeEnd);
     sampleOcean(x, z, elapsed, _sample, detail);
 
-    // Buoys are ~1.8 m tall and moored, so they follow the swell's *slope* but
-    // only partially — 0.62 of the geometric tilt. At 1.0 they looked like
-    // weather vanes; well under it they looked welded to the horizon.
     const targetX = _sample.nx * 0.62;
     const targetZ = _sample.nz * 0.62;
     const k = Math.min(1, 5.5 * dt);
     this.tiltX[i] += (targetX - this.tiltX[i]) * k;
     this.tiltZ[i] += (targetZ - this.tiltZ[i]) * k;
     this.height[i] += (_sample.height - this.height[i]) * Math.min(1, 14 * dt);
+  }
 
+  private composeMatrix(i: number): void {
     _normal.set(this.tiltX[i], 1, this.tiltZ[i]).normalize();
     _q.setFromUnitVectors(_up, _normal);
-    // Bake the fixed yaw in after the tilt so the facets face different ways
-    // without changing which way the buoy leans.
     _q.multiply(_yawQuat(this.yaw[i]));
-
-    // The geometry is authored with its design waterline at local y = 0, so the
-    // origin goes straight on the surface. No fudge offset: one would have to
-    // be scaled with the per-buoy size to mean the same thing, and it would
-    // only be hiding a shape problem anyway.
-    _pos.set(x, this.height[i], z);
+    _pos.set(this.baseX[i], this.height[i], this.baseZ[i]);
     _scale.setScalar(this.scale[i]);
     _m.compose(_pos, _q, _scale);
-    this.body.setMatrixAt(i, _m);
   }
 
   dispose(): void {

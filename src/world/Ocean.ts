@@ -334,7 +334,7 @@ export class Ocean {
         u.uSparkleAmount.value = 1.0;
         u.uDetailFadeStart.value = 110;
         u.uDetailFadeEnd.value = 760;
-        this.setDensity(224, 88);
+        this.setDensity(192, 76);
         defs.INK_TIER_HIGH = 1;
         break;
       case 'ultra':

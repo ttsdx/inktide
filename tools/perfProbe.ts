@@ -61,7 +61,7 @@ console.log('\nOCEAN DISC');
   const discs = [
     ['low', 128, 48],
     ['medium', 192, 72],
-    ['high', 224, 88],
+    ['high', 192, 76],
     ['ultra', 384, 132],
   ];
   for (const [tier, segments, rings] of discs) {
