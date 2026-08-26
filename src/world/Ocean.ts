@@ -308,7 +308,9 @@ export class Ocean {
   setQuality(tier: OceanQuality): void {
     const u = this.material.uniforms;
     const defs = this.material.defines as Record<string, string | number>;
-    const wasLow = defs.INK_TIER_LOW !== undefined;
+    const before = `${defs.INK_TIER_LOW ?? ''}|${defs.INK_TIER_MED ?? ''}`;
+    delete defs.INK_TIER_LOW;
+    delete defs.INK_TIER_MED;
     switch (tier) {
       case 'low':
         u.uDetailStrength.value = 0.0;
@@ -324,7 +326,7 @@ export class Ocean {
         u.uDetailFadeStart.value = 80;
         u.uDetailFadeEnd.value = 520;
         this.setDensity(192, 72);
-        delete defs.INK_TIER_LOW;
+        defs.INK_TIER_MED = 1;
         break;
       case 'high':
         u.uDetailStrength.value = 1.0;
@@ -332,7 +334,6 @@ export class Ocean {
         u.uDetailFadeStart.value = 110;
         u.uDetailFadeEnd.value = 760;
         this.setDensity(256, 100);
-        delete defs.INK_TIER_LOW;
         break;
       case 'ultra':
         u.uDetailStrength.value = 1.0;
@@ -340,11 +341,10 @@ export class Ocean {
         u.uDetailFadeStart.value = 150;
         u.uDetailFadeEnd.value = 900;
         this.setDensity(384, 132);
-        delete defs.INK_TIER_LOW;
         break;
     }
-    const isLow = defs.INK_TIER_LOW !== undefined;
-    if (isLow !== wasLow) this.material.needsUpdate = true;
+    const after = `${defs.INK_TIER_LOW ?? ''}|${defs.INK_TIER_MED ?? ''}`;
+    if (after !== before) this.material.needsUpdate = true;
   }
 
   /** Triangle count of the current disc. Used by the perf probe. */
@@ -938,7 +938,10 @@ void main() {
   float detail = min(vDetail, 1.0 - smoothstep(0.45, 2.6, px));
 
   float detailAmt = uDetailStrength * detail;
-  vec3 dw = detailWave(p, uTime, px) * detailAmt;
+  vec3 dw = vec3(0.0);
+  // Horizon pixels cannot hold the ripple. Paying seven octaves there is how
+  // a chase frame spends most of its fragment time on water nobody can read.
+  if (detailAmt > 0.04 && px < 1.35) dw = detailWave(p, uTime, px) * detailAmt;
   vec3 N = normalize(vec3(vNormal.x - dw.x, vNormal.y, vNormal.z - dw.y));
   vec3 V = normalize(cameraPosition - vWorldPos);
   float ndv = clamp(dot(N, V), 0.0, 1.0);
@@ -1196,6 +1199,7 @@ void main() {
   // uContactCount is 0 and the loop costs nothing.
   // -----------------------------------------------------------------------
   float contact = 0.0;
+  if (px < 1.22) {
   for (int i = 0; i < ${MAX_CONTACTS}; i++) {
     if (i >= uContactCount) break;
     vec4 A = uContactA[i];
@@ -1234,6 +1238,7 @@ void main() {
     float inside = (1.0 - smoothstep(0.5, 1.0, r)) * 0.42;
     contact = max(contact, max(collar, inside) * B.x * vertical);
   }
+  }
 
   // -----------------------------------------------------------------------
   // 8. FOAM SOURCE D — THE WATERLINE
@@ -1247,7 +1252,7 @@ void main() {
   // -----------------------------------------------------------------------
   float depthFoam = 0.0;
 #ifndef INK_TIER_LOW
-  {
+  if (px < 1.22) {
     vec2 suv = (vClipPos.xy / vClipPos.w) * 0.5 + 0.5;
     float sceneDepth = texture(uSceneDepth, suv).w * uCameraFar;
     float ourDepth = -(viewMatrix * vec4(vWorldPos, 1.0)).z;
@@ -1388,11 +1393,11 @@ void main() {
   float specGate = fixedStep(0.03, specRaw, 0.02);
 
   float glitterMask = 0.0;
-#ifdef INK_TIER_LOW
-  // Glitter lattice compiled out. The hashes per pixel were a measurable
-  // share of the fragment cost and contributed nothing once sparkle amount
-  // was already at zero. The mask stays zero so the debug tap still compiles.
+#if defined(INK_TIER_LOW) || defined(INK_TIER_MED)
+  // Glitter lattice compiled out. Medium keeps the rest of the water and only
+  // drops the per-pixel hashes; low drops this and the depth foam together.
 #else
+  if (px < 1.22) {
   float bigGlint;
   // Scale the glint lattice with distance so a sparkle stays roughly the same
   // size on screen.
@@ -1409,6 +1414,7 @@ void main() {
   float glint = glitter(p, uTime, uSparkleDensity / glintOctave, bigGlint);
   glitterMask = (glint * 0.6 + bigGlint * 1.0) * specGate * uSparkleAmount * detail;
   col += glitterMask * uSunTint * 0.85 * (1.0 - foamEdge);
+  }
 #endif
 
   // The broad sun path. Two discrete steps, and each step is an ocean-family

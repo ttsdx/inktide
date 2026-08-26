@@ -82,6 +82,7 @@ export class Game {
   private wakeEnabled = true;
   private probe: ProbeScene | null = null;
   private waterline: WaterlineRig | null = null;
+  private showPerf = false;
 
   /** Reusable buffers so the per-frame wiring does not allocate. */
   private readonly emitters: WakeEmitter[] = [];
@@ -104,6 +105,7 @@ export class Game {
     const url = new URL(window.location.href);
     const tier = (url.searchParams.get('quality') as QualityTier | null) ?? undefined;
     const adaptive = url.searchParams.get('adaptive') !== '0';
+    this.showPerf = url.searchParams.get('perf') === '1';
 
     this.engine = new Engine({ canvas, tier: tier ?? 'high', adaptive, maxPixelRatio: 2 });
     this.input = new Input(canvas);
@@ -228,6 +230,7 @@ export class Game {
     this.wake?.setQuality(tier);
     this.spray?.setQuality(tier);
     this.riderLodDist = tier === 'low' ? 28 : tier === 'medium' ? 52 : tier === 'high' ? 80 : 120;
+    if (this.racingLine) this.racingLine.glow.visible = tier !== 'low';
   }
 
   private buildRacers(): void {
@@ -711,6 +714,15 @@ export class Game {
     d.course = this.hudCourse;
     d.corner = this.cornerAhead();
     d.paused = this.userPaused;
+    d.perf = this.showPerf
+      ? {
+          fps: this.engine.fps,
+          draws: this.engine.pipeline.stats.calls,
+          tris: this.engine.pipeline.stats.triangles,
+          tier: this.engine.adaptive.tier,
+          pixelRatio: this.engine.pixelRatio,
+        }
+      : null;
     this.hud.update(d, ctx);
 
     const s = this.screensData;

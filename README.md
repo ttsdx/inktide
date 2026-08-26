@@ -165,7 +165,9 @@ are pulled when a frame runs long:
    not submitted.
 
 Quality can be pinned with `?quality=low|medium|high|ultra` and adaptive scaling
-disabled with `?adaptive=0` (the screenshot harness does both).
+disabled with `?adaptive=0` (the screenshot harness does both). Add `?perf=1` to
+draw a live fps / tier / draw-call meter — that is how a real GPU answers
+whether the race holds 60 at retina.
 
 ## The screenshot harness
 

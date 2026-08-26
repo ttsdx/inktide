@@ -112,6 +112,16 @@ export interface HudData {
   /** Speedometer full-scale in m/s. Defaults to the player's spec top speed. */
   topSpeed?: number;
   paused?: boolean;
+  /** Live frame budget. Only set when the game is started with `?perf=1`. */
+  perf?: HudPerf | null;
+}
+
+export interface HudPerf {
+  fps: number;
+  draws: number;
+  tris: number;
+  tier: string;
+  pixelRatio: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -230,16 +240,15 @@ export class Hud {
     c.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     c.clearRect(0, 0, this.w, this.h);
 
-    // The HUD is hidden on the title card and handed over to `Screens` for the
-    // results, but it fades rather than cuts so the two never both pop.
     const shown = this.entrySpring.value;
-    if (shown <= 0.002) return;
-
-    c.save();
-    c.globalAlpha = clamp01(shown);
-    this.drawRaceClusters(c, data, shown);
-    this.drawCentre(c, data);
-    c.restore();
+    if (shown > 0.002) {
+      c.save();
+      c.globalAlpha = clamp01(shown);
+      this.drawRaceClusters(c, data, shown);
+      this.drawCentre(c, data);
+      c.restore();
+    }
+    if (data.perf) this.drawPerf(c, data.perf);
   }
 
   dispose(): void {
@@ -1036,6 +1045,33 @@ export class Hud {
         0.3 + a * 0.7,
       );
     }
+    c.restore();
+  }
+
+  /**
+   * Frame budget, top-left. Only drawn when the game is booted with `?perf=1`
+   * so a real GPU can answer "does it hold 60" without a profiler.
+   */
+  private drawPerf(c: Ctx2D, perf: HudPerf): void {
+    const u = this.u;
+    const x = 14 * u;
+    const y = 12 * u;
+    const fps = perf.fps;
+    const ok = fps >= 58;
+    const fill = ok ? CSS.green : fps >= 45 ? CSS.amber : CSS.danger;
+    const line = `${fps.toFixed(0)}  ${perf.tier}  ${perf.pixelRatio.toFixed(2)}x  ${perf.draws}  ${(perf.tris / 1000).toFixed(0)}k`;
+    c.save();
+    c.globalAlpha = 0.92;
+    c.fillStyle = 'rgba(10,18,38,0.55)';
+    c.beginPath();
+    c.roundRect(x, y, 420 * u, 28 * u, 6 * u);
+    c.fill();
+    drawText(c, line, x + 10 * u, y + 20 * u, {
+      size: 13 * u,
+      weight: 0.08,
+      fill,
+      ink: CSS.ink,
+    });
     c.restore();
   }
 }

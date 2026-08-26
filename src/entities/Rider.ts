@@ -1,5 +1,6 @@
 import { Color, Euler, Group, MathUtils, Mesh, Object3D, Quaternion, Vector3 } from 'three';
 import type { BufferGeometry, Material } from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { BoatState, FrameContext, RiderPose } from '../contracts.ts';
 import { PALETTE } from '../core/Palette.ts';
 import { LAYER_OPAQUE } from '../render/layers.ts';
@@ -362,18 +363,14 @@ export class Rider {
     this.part(buildNeck(), skin, r.neck, 'neck');
     this.part(buildHelmet(), gear, r.head, 'helmet');
     this.part(buildVisor(), visor, r.head, 'visor');
-    this.part(buildHelmetStripe(), paint, r.head, 'helmetStripe');
-    this.part(buildHelmetFin(), paint, r.head, 'helmetFin');
+    this.parts([buildHelmetStripe(), buildHelmetFin()], paint, r.head, 'helmetPaint');
 
     for (const side of [SIDE_LEFT, SIDE_RIGHT]) {
       const tag = side === SIDE_LEFT ? 'L' : 'R';
       this.part(buildShoulderPad(side), paint, r.sided('shoulder', side), `shoulderPad${tag}`);
       this.part(buildUpperArm(), suit, r.sided('upperArm', side), `upperArm${tag}`);
       this.part(buildForearm(), suit, r.sided('forearm', side), `forearm${tag}`);
-      this.part(buildGlove(), gear, r.sided('hand', side), `glove${tag}`);
-      // Its own mesh so it reads against the fist's silhouette rather than
-      // being lofted into it and disappearing.
-      this.part(buildThumb(side), gear, r.sided('hand', side), `thumb${tag}`);
+      this.parts([buildGlove(), buildThumb(side)], gear, r.sided('hand', side), `hand${tag}`);
       this.part(buildThigh(), suit, r.sided('thigh', side), `thigh${tag}`);
       this.part(buildShin(), suit, r.sided('shin', side), `shin${tag}`);
       this.part(buildBoot(), gear, r.sided('foot', side), `boot${tag}`);
@@ -422,6 +419,14 @@ export class Rider {
     this.geometries.push(geo);
     parent.add(mesh);
     return mesh;
+  }
+
+  /** Same-bone, same-material parts. One draw and one ink shell instead of N. */
+  private parts(geos: BufferGeometry[], mat: CelMaterial, parent: Object3D, name: string): Mesh {
+    const merged = mergeGeometries(geos, false);
+    for (const g of geos) g.dispose();
+    if (!merged) throw new Error(`Rider: failed to merge ${name}`);
+    return this.part(merged, mat, parent, name);
   }
 
   // -------------------------------------------------------------------------
