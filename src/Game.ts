@@ -1050,7 +1050,15 @@ export class Game {
 
     const circuit = this.session === 'circuit';
     const rogue = this.session === 'rogue' ? this.rogue : null;
-    const phase = this.session === 'title' ? 'intro' : circuit ? (director?.phase ?? 'intro') : 'racing';
+    const rogueRacing = rogue?.phase === 'racing';
+    const phase =
+      this.session === 'title'
+        ? 'intro'
+        : circuit
+          ? (director?.phase ?? 'intro')
+          : rogueRacing
+            ? 'racing'
+            : 'intro';
     const playerProgress = circuit ? director?.get(0) : null;
 
     this.states.length = 0;
@@ -1072,10 +1080,7 @@ export class Game {
     d.course = circuit ? this.hudCourse : null;
     d.corner = circuit ? this.cornerAhead() : null;
     d.paused = this.userPaused;
-    d.rogue =
-      this.session === 'rogue' && rogue && rogue.phase === 'racing'
-        ? this.toHudRogue(rogue)
-        : null;
+    d.rogue = rogueRacing && rogue ? this.toHudRogue(rogue) : null;
     d.perf = this.showPerf
       ? {
           fps: this.engine.fps,
