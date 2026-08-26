@@ -1391,10 +1391,11 @@ void main() {
   float specRaw = pow(max(dot(N, H), 0.0), 64.0);
   float specGate = fixedStep(0.03, specRaw, 0.02);
 
+  float glitterMask = 0.0;
 #ifdef INK_TIER_LOW
   // Glitter lattice compiled out. The hashes per pixel were a measurable
   // share of the fragment cost and contributed nothing once sparkle amount
-  // was already at zero.
+  // was already at zero. The mask stays zero so the debug tap still compiles.
 #else
   float bigGlint;
   // Scale the glint lattice with distance so a sparkle stays roughly the same
@@ -1410,7 +1411,7 @@ void main() {
   // would make individual glints crawl.
   float glintOctave = exp2(floor(log2(max(vViewDist, 4.0) / 12.0)));
   float glint = glitter(p, uTime, uSparkleDensity / glintOctave, bigGlint);
-  float glitterMask = (glint * 0.6 + bigGlint * 1.0) * specGate * uSparkleAmount * detail;
+  glitterMask = (glint * 0.6 + bigGlint * 1.0) * specGate * uSparkleAmount * detail;
   col += glitterMask * uSunTint * 0.85 * (1.0 - foamEdge);
 #endif
 
