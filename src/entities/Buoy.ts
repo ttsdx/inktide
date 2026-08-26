@@ -66,8 +66,6 @@ const RADIAL = 9;
 
 /** Buoys inside this distance from the focus update every frame. */
 const NEAR_RADIUS = 260;
-/** Buoys between NEAR and FAR update on a 1-in-N round robin. */
-const FAR_RADIUS = 900;
 const FAR_STRIDE = 6;
 
 export interface BuoyFieldOptions {

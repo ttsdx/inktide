@@ -259,7 +259,7 @@ export class RacingLine {
    * spline, so they do not stretch with the segment length.
    */
   setQuality(tier: 'low' | 'medium' | 'high' | 'ultra'): void {
-    const spacing = tier === 'low' ? 3.6 : tier === 'medium' ? 2.5 : 1.8;
+    const spacing = tier === 'low' ? 3.6 : tier === 'medium' ? 2.5 : tier === 'high' ? 2.4 : 1.8;
     if (spacing === this.segmentLength) return;
     this.segmentLength = spacing;
     const next = buildRibbon(this.course, this.halfWidth, spacing);

@@ -1125,7 +1125,17 @@ void main() {
   // adding means foam needs a genuine fold AND a genuine crest, which is also
   // the physical condition for a wave to actually break.
   // -----------------------------------------------------------------------
-  float fn = foamNoise(p, uTime, px);
+#ifdef INK_TIER_LOW
+  const float FOAM_PX = 0.95;
+#elif defined(INK_TIER_MED)
+  const float FOAM_PX = 1.05;
+#elif defined(INK_TIER_HIGH)
+  const float FOAM_PX = 1.10;
+#else
+  const float FOAM_PX = 1.35;
+#endif
+  float fn = 0.0;
+  if (px < FOAM_PX) fn = foamNoise(p, uTime, px);
   // Foam gets its own, stricter swell gate than the contour above.
   //
   // Sharing one gate looked economical and was wrong. The contour wants to
