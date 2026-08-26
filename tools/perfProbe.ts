@@ -99,7 +99,7 @@ console.log(`
     1. The ocean fragment shader. Long, covering most of the screen at retina.
        Low tier compiles the glitter lattice out and rebuilds a coarser disc.
     2. Four full-screen post passes at framebuffer resolution. Shed by tier.
-    3. WakeField: ping-pong target, 256² on low through 1024² on ultra.
+    3. WakeField: ping-pong target, 256² on low, 384² on high, 1024² on ultra.
 
   The levers, in the order the adaptive controller pulls them: pixel ratio,
   then MSAA, then bloom (off at high), then half-res interior lines (high),

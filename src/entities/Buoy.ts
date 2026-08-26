@@ -65,8 +65,8 @@ import type { FrameContext } from '../contracts.ts';
 const RADIAL = 9;
 
 /** Buoys inside this distance from the focus update every frame. */
-const NEAR_RADIUS = 260;
-const FAR_STRIDE = 6;
+const NEAR_RADIUS = 180;
+const FAR_STRIDE = 8;
 
 export interface BuoyFieldOptions {
   /** Maximum number of instances to allocate. */

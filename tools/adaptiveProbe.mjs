@@ -195,12 +195,12 @@ check(
     t.medium.interiorLines &&
     !t.low.bloom &&
     !t.low.interiorLines &&
-    t.high.pixelRatio >= 1.5 &&
+    t.high.pixelRatio >= 2 &&
     t.ultra.pixelRatio >= 2 &&
     t.ultra.pixelRatio >= t.high.pixelRatio,
   'the tier ladder sheds work in the right order',
   `res ultra ${t.ultra.pixelRatio} / high ${t.high.pixelRatio} retina, msaa ${t.ultra.samples}>${t.high.samples}, ` +
-    `high 1.5x skips bloom, half-res lines, lines stay on through medium, bloom/lines off at low`,
+    `high 2x skips bloom, LDR colour, half-res lines, lines stay on through medium, bloom/lines off at low`,
 );
 check(
   report.recovered.pixelRatio > report.bottom.pixelRatio,
@@ -240,9 +240,12 @@ check(
 check(c.instancedMeshes >= 6, 'instancing is in use', `${c.totalInstances} instances in ${c.instancedMeshes} draws`);
 
 check(
-  t.low.oceanTriangles < t.ultra.oceanTriangles && t.low.wakeResolution < t.ultra.wakeResolution,
+  t.low.oceanTriangles < t.ultra.oceanTriangles &&
+    t.low.wakeResolution < t.high.wakeResolution &&
+    t.high.wakeResolution < t.ultra.wakeResolution &&
+    t.high.wakeResolution === 384,
   'lower tiers drop ocean density and wake resolution',
-  `ocean ${t.ultra.oceanTriangles} -> ${t.low.oceanTriangles} tris, wake ${t.ultra.wakeResolution} -> ${t.low.wakeResolution}`,
+  `ocean ${t.ultra.oceanTriangles} -> ${t.low.oceanTriangles} tris, wake ${t.ultra.wakeResolution} -> high ${t.high.wakeResolution} -> ${t.low.wakeResolution}`,
 );
 
 console.log('\nQUALITY TIERS');

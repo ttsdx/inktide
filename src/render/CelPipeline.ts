@@ -1,7 +1,6 @@
 import {
   Camera,
   Color,
-  FloatType,
   HalfFloatType,
   LinearFilter,
   NearestFilter,
@@ -66,7 +65,9 @@ const BLOOM_STRENGTH = 0.3;
 export const QUALITY_PRESETS: Record<'low' | 'medium' | 'high' | 'ultra', PipelineQuality> = {
   low: { pixelRatio: 1.0, samples: 0, bloom: false, interiorLines: false, bloomScale: 4, lineScale: 2 },
   medium: { pixelRatio: 1.0, samples: 0, bloom: true, interiorLines: true, bloomScale: 4, lineScale: 1 },
-  high: { pixelRatio: 1.5, samples: 0, bloom: false, interiorLines: true, bloomScale: 4, lineScale: 2 },
+  // Play retina: 2× colour, no MSAA, no bloom, half-res Sobel. Ultra adds 4×
+  // MSAA and the bloom chain on the same 2× buffer — adaptive never climbs there.
+  high: { pixelRatio: 2.0, samples: 0, bloom: false, interiorLines: true, bloomScale: 4, lineScale: 2 },
   ultra: { pixelRatio: 2.0, samples: 4, bloom: true, interiorLines: true, bloomScale: 2, lineScale: 1 },
 };
 
@@ -107,13 +108,22 @@ export class CelPipeline {
     this.compositePass.uniforms.uInteriorLines.value = this.quality.interiorLines ? 1 : 0;
   }
 
+  /**
+   * Bloom extract needs values above 1. Play high has bloom off, so the main
+   * target can be LDR: half the bandwidth of a 2× half-float MRT, which is the
+   * fill that was missing 60 fps on mid-range retina.
+   */
+  private sceneColorType() {
+    return this.quality.bloom && this.renderer.capabilities.isWebGL2 ? HalfFloatType : UnsignedByteType;
+  }
+
   private createTargets(w: number, h: number): void {
-    const type = this.renderer.capabilities.isWebGL2 ? HalfFloatType : UnsignedByteType;
+    const colorType = this.sceneColorType();
 
     this.main?.dispose();
     this.main = new WebGLRenderTarget(w, h, {
       count: 2,
-      type,
+      type: colorType,
       format: RGBAFormat,
       minFilter: LinearFilter,
       magFilter: LinearFilter,
@@ -135,7 +145,7 @@ export class CelPipeline {
 
     this.lines?.dispose();
     this.lines = new WebGLRenderTarget(lw, lh, {
-      type,
+      type: UnsignedByteType,
       format: RGBAFormat,
       minFilter: LinearFilter,
       magFilter: LinearFilter,
@@ -149,7 +159,7 @@ export class CelPipeline {
     // target so the 2× play path does not pay a second full-res blit.
     this.depthCopy?.dispose();
     this.depthCopy = new WebGLRenderTarget(lw, lh, {
-      type,
+      type: UnsignedByteType,
       format: RGBAFormat,
       minFilter: NearestFilter,
       magFilter: NearestFilter,
@@ -157,12 +167,12 @@ export class CelPipeline {
       colorSpace: NoColorSpace,
     });
 
-    const bw = half(w / this.quality.bloomScale);
-    const bh = half(h / this.quality.bloomScale);
+    const bw = this.quality.bloom ? half(w / this.quality.bloomScale) : 1;
+    const bh = this.quality.bloom ? half(h / this.quality.bloomScale) : 1;
     for (const key of ['bright', 'blurA', 'blurB'] as const) {
       this[key]?.dispose();
       this[key] = new WebGLRenderTarget(bw, bh, {
-        type,
+        type: this.quality.bloom ? colorType : UnsignedByteType,
         format: RGBAFormat,
         minFilter: LinearFilter,
         magFilter: LinearFilter,
@@ -290,8 +300,8 @@ export class CelPipeline {
     const { w: lw, h: lh } = this.lineDims(w, h);
     this.lines.setSize(lw, lh);
     this.depthCopy.setSize(lw, lh);
-    const bw = Math.max(1, Math.floor(w / this.quality.bloomScale));
-    const bh = Math.max(1, Math.floor(h / this.quality.bloomScale));
+    const bw = this.quality.bloom ? Math.max(1, Math.floor(w / this.quality.bloomScale)) : 1;
+    const bh = this.quality.bloom ? Math.max(1, Math.floor(h / this.quality.bloomScale)) : 1;
     this.bright.setSize(bw, bh);
     this.blurA.setSize(bw, bh);
     this.blurB.setSize(bw, bh);
@@ -301,8 +311,9 @@ export class CelPipeline {
     const samplesChanged = q.samples !== undefined && q.samples !== this.quality.samples;
     const scaleChanged = q.bloomScale !== undefined && q.bloomScale !== this.quality.bloomScale;
     const lineChanged = q.lineScale !== undefined && q.lineScale !== this.quality.lineScale;
+    const bloomChanged = q.bloom !== undefined && q.bloom !== this.quality.bloom;
     Object.assign(this.quality, q);
-    if (samplesChanged || scaleChanged || lineChanged) {
+    if (samplesChanged || scaleChanged || lineChanged || bloomChanged) {
       this.createTargets(this.fbSize.x, this.fbSize.y);
     }
     // render() only ever forces the strength to zero, so that a tuning sweep on

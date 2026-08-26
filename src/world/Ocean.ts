@@ -345,7 +345,7 @@ export class Ocean {
         u.uDetailFadeEnd.value = 760;
         this.setDensity(192, 72);
         defs.INK_TIER_HIGH = 1;
-        u.uLodPx.value = 1.5;
+        u.uLodPx.value = 2;
         break;
       case 'ultra':
         u.uDetailStrength.value = 1.0;
@@ -978,7 +978,7 @@ void main() {
 #elif defined(INK_TIER_MED)
   const float DETAIL_PX = 1.05;
 #elif defined(INK_TIER_HIGH)
-  const float DETAIL_PX = 0.95;
+  const float DETAIL_PX = 0.88;
 #else
   const float DETAIL_PX = 1.35;
 #endif
@@ -1148,7 +1148,7 @@ void main() {
 #elif defined(INK_TIER_MED)
   const float FOAM_PX = 1.05;
 #elif defined(INK_TIER_HIGH)
-  const float FOAM_PX = 1.10;
+  const float FOAM_PX = 0.95;
 #else
   const float FOAM_PX = 1.35;
 #endif
@@ -1213,9 +1213,14 @@ void main() {
   // R is the foam amount, G is how fresh it is — fresh wake gets the bright
   // core, old wake settles into the shaded tone.
   // -----------------------------------------------------------------------
+#ifdef INK_TIER_HIGH
+  const float NEAR_WORK_PX = 0.88;
+#else
+  const float NEAR_WORK_PX = 1.22;
+#endif
   float wake = 0.0;
   float wakeFresh = 0.0;
-  if (uWakeParams.w > 0.5 && px < 1.22) {
+  if (uWakeParams.w > 0.5 && px < NEAR_WORK_PX) {
     // Warp the lookup in world space before sampling, to break the texel grid.
     //
     // The field is half a metre per texel, which a chase camera magnifies to
@@ -1229,8 +1234,14 @@ void main() {
     // Three texels of wander costs one fetch and makes the threshold follow the
     // noise instead of the lattice, so the wake's edge tears exactly like the
     // crest foam beside it rather than resolving into rectangles.
+#ifdef INK_TIER_HIGH
+    // Play retina: two ALU hashes instead of two extra noise taps. The field
+    // is 384²; the lattice is still broken, just not with a texture fetch.
+    vec2 jitter = vec2(hash21(floor(p * 3.1)), hash21(floor(p * 3.1 + 19.7))) - 0.5;
+#else
     vec2 jitter = vec2(noiseR(p * 0.21 + vec2(0.13, 0.71)),
                        noiseG(p * 0.21 + vec2(0.57, 0.29))) - 0.5;
+#endif
     vec2 wuv = (p + jitter * 1.6 - uWakeParams.xy) / (uWakeParams.z * 2.0) + 0.5;
     vec2 inside = step(vec2(0.0), wuv) * step(wuv, vec2(1.0));
     vec2 wf = texture(uWakeField, wuv).rg * (inside.x * inside.y);
@@ -1251,7 +1262,7 @@ void main() {
   // uContactCount is 0 and the loop costs nothing.
   // -----------------------------------------------------------------------
   float contact = 0.0;
-  if (px < 1.22) {
+  if (px < NEAR_WORK_PX) {
   for (int i = 0; i < ${MAX_CONTACTS}; i++) {
     if (i >= uContactCount) break;
     vec4 A = uContactA[i];
@@ -1304,7 +1315,7 @@ void main() {
   // -----------------------------------------------------------------------
   float depthFoam = 0.0;
 #ifndef INK_TIER_LOW
-  if (px < 1.22) {
+  if (px < NEAR_WORK_PX) {
     vec2 suv = (vClipPos.xy / vClipPos.w) * 0.5 + 0.5;
     float sceneDepth = texture(uSceneDepth, suv).w * uCameraFar;
     float ourDepth = -(viewMatrix * vec4(vWorldPos, 1.0)).z;
@@ -1441,7 +1452,15 @@ void main() {
   // on white foam are invisible and only cost fill.
   // -----------------------------------------------------------------------
   vec3 H = normalize(SUN_DIR + V);
-  float specRaw = pow(max(dot(N, H), 0.0), 64.0);
+  // x^64 as six squares: the ALU is cheaper than pow() and the exponent is
+  // a constant, so there is no reason to pay the general path every ocean pixel.
+  float specRaw = max(dot(N, H), 0.0);
+  specRaw *= specRaw;
+  specRaw *= specRaw;
+  specRaw *= specRaw;
+  specRaw *= specRaw;
+  specRaw *= specRaw;
+  specRaw *= specRaw;
   float specGate = fixedStep(0.03, specRaw, 0.02);
 
   float glitterMask = 0.0;

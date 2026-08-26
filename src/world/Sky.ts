@@ -54,6 +54,7 @@ export class Sky {
       side: BackSide,
       depthWrite: false,
       depthTest: true,
+      defines: {},
       uniforms: {
         uTime: { value: 0 },
         uSunDir: { value: SUN.clone() },
@@ -127,17 +128,21 @@ export class Sky {
 
   /**
    * Clouds are a full-screen transparent overdraw of FBM. Low skips them.
-   * Medium and high compile out the warp sample and the sun-rim density fetch.
+   * Medium and high compile out the warp sample and the sun-rim density fetch,
+   * and cheapen the leftover dome pixels (one noise octave, 2-tap hash).
    * Ultra keeps the full field.
    */
   setQuality(tier: 'low' | 'medium' | 'high' | 'ultra'): void {
     this.clouds.visible = tier !== 'low';
-    const defs = this.cloudMat.defines as Record<string, string | number>;
-    const before = defs.INK_SKY_CHEAP ?? '';
-    if (tier === 'ultra') delete defs.INK_SKY_CHEAP;
-    else defs.INK_SKY_CHEAP = 1;
-    const after = defs.INK_SKY_CHEAP ?? '';
-    if (after !== before) this.cloudMat.needsUpdate = true;
+    const cheap = tier !== 'ultra';
+    for (const mat of [this.cloudMat, this.domeMat]) {
+      const defs = mat.defines as Record<string, string | number>;
+      const before = defs.INK_SKY_CHEAP ?? '';
+      if (cheap) defs.INK_SKY_CHEAP = 1;
+      else delete defs.INK_SKY_CHEAP;
+      const after = defs.INK_SKY_CHEAP ?? '';
+      if (after !== before) mat.needsUpdate = true;
+    }
   }
 
   /** Keep the dome centred on the camera and advance the drift. */
@@ -212,6 +217,12 @@ const vec3 C4 = ${glslVec3(PALETTE.skyHorizon)};
 
 /** Cheap 3D-ish value noise on a direction, for perturbing band edges. */
 float dirNoise(vec3 d, float scale) {
+#ifdef INK_SKY_CHEAP
+  // Play tiers: leftover sky pixels after the ocean. Two hashes, not a trilinear
+  // 8-corner lerp — the band edge still wanders, it just costs a fraction.
+  vec2 p = d.xz * scale + d.y * 1.7;
+  return mix(hash21(floor(p)), hash21(floor(p) + vec2(17.3, 9.1)), fract(p.x));
+#else
   vec3 p = d * scale;
   vec3 i = floor(p);
   vec3 f = fract(p);
@@ -223,6 +234,7 @@ float dirNoise(vec3 d, float scale) {
     n += hash21((i + o).xy + (i.z + o.z) * 37.0) * w;
   }
   return n;
+#endif
 }
 
 /**
@@ -285,7 +297,11 @@ void main() {
   // Two octaves of wobble: a long one that gives each band a lazy sweep, and a
   // shorter one that roughens the cut. Amplitude is small — the bands must
   // still read as horizontal, just not as ruled lines.
+#ifdef INK_SKY_CHEAP
+  float wobble = (dirNoise(d, 2.6) - 0.5) * 0.09;
+#else
   float wobble = (dirNoise(d, 2.6) - 0.5) * 0.075 + (dirNoise(d, 7.3) - 0.5) * 0.028;
+#endif
 
   // WHERE THE WARMTH GOES.
   //

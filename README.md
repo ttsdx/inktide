@@ -153,17 +153,17 @@ are pulled when a frame runs long:
 1. **Adaptive resolution.** A windowed median of frame time (not a mean — one GC
    spike should not drop a tier) moves the pixel ratio in small steps with a long
    cooldown, so the controller cannot oscillate.
-2. **Quality tiers.** Default play (`high`) is **1.5× (between 1× and full 2×
-   retina), no MSAA, no bloom**, with interior lines and the pre-ocean depth
-   copy at half-res. That is ~56% of the fill of a 2× target and still sharper
-   than 1×. Ultra keeps **2× + 4× MSAA**, native-res lines, and bloom for
-   captures. Medium is 1× with bloom and lines. Low drops both post passes.
+2. **Quality tiers.** Default play (`high`) is **2× retina, no MSAA, no bloom**,
+   with interior lines and the pre-ocean depth copy at half-res. The main MRT is
+   LDR on any tier that has bloom off (half the bandwidth of a 2× half-float
+   target). Ultra keeps **2× + 4× MSAA**, native-res lines, HDR colour, and bloom
+   for captures. Medium is 1× with bloom and lines. Low drops both post passes.
    The same callback also rebuilds the ocean disc coarser, shrinks the wake
-   field, trims spray, and hides distant AI riders. HUD canvas is 1× on every
-   play tier (2× only on ultra). Low hides the cloud dome overdraw entirely.
-   Ocean feature LOD is measured in CSS pixels, so a denser framebuffer
-   sharpens bands without evaluating extra octaves. A play session opens at
-   ~1× and climbs toward the tier cap if frames stay under budget. Adaptive
+   field (high is 384² / 24 Hz), trims spray, and hides distant AI riders. HUD
+   canvas is 1× on every play tier (2× only on ultra). Low hides the cloud dome
+   overdraw entirely. Ocean feature LOD is measured in CSS pixels, so a denser
+   framebuffer sharpens bands without evaluating extra octaves. A play session
+   opens at ~1× and climbs toward 2× if frames stay under budget. Adaptive
    never promotes into ultra (2× + 4× MSAA); that tier is opt-in via
    `?quality=ultra`.
 3. **Instancing** for buoys, spray, regular gate shells (collar, mast, arch,

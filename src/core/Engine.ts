@@ -78,8 +78,8 @@ class AdaptiveQuality {
         this.tier === 'ultra' ? 'high' : this.tier === 'high' ? 'medium' : this.tier === 'medium' ? 'low' : null;
       if (!next) return null;
       // Keep the framebuffer size from jumping *up* when a cheaper preset has
-      // a higher base pixel ratio than `minScale * oldBase` (ultra 0.62×2 = 1.24
-      // vs high at scale 1 = 1.5). The drop has to make the frame cheaper.
+      // a higher base pixel ratio than `minScale * oldBase` (ultra 0.5×2 = 1.0
+      // vs high at scale 1 = 2.0). The drop has to make the frame cheaper.
       const keep = effective(this.tier, this.scale);
       this.tier = next;
       const newBase = Math.min(dpr, QUALITY_PRESETS[this.tier].pixelRatio);
@@ -88,9 +88,9 @@ class AdaptiveQuality {
       return 'down';
     }
 
-    // Only climb back when there is real headroom, and climb slower than we
-    // fall so a marginal machine settles instead of pumping. Resolution first;
-    // a tier climb preserves the current pixel ratio and lets scale walk up.
+    // Play never auto-promotes into ultra. Ultra is 2× with 4× MSAA, which is
+    // the capture preset — putting a mid-range GPU there the moment it has
+    // 11 ms of headroom at high is how 60 fps dies. Pin with ?quality=ultra.
     if (median < 11 && p90 < 14) {
       if (this.scale < this.maxScale) {
         this.scale = Math.min(this.maxScale, this.scale + 0.08);

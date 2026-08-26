@@ -321,8 +321,10 @@ export class WakeField implements GameSystem {
         this.setUpdateRate(30);
         break;
       case 'high':
-        this.setResolution(512);
-        this.setUpdateRate(30);
+        // 384² at 24 Hz: enough texel density for a 2× chase without a second
+        // 512² full-field pass competing with the ocean at retina.
+        this.setResolution(384);
+        this.setUpdateRate(24);
         break;
       case 'ultra':
         this.setResolution(1024);
