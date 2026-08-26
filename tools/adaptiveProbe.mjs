@@ -195,11 +195,12 @@ check(
     t.medium.interiorLines &&
     !t.low.bloom &&
     !t.low.interiorLines &&
-    t.high.pixelRatio >= 2 &&
+    t.high.pixelRatio >= 1.5 &&
+    t.ultra.pixelRatio >= 2 &&
     t.ultra.pixelRatio >= t.high.pixelRatio,
   'the tier ladder sheds work in the right order',
-  `res ${t.ultra.pixelRatio}>=${t.high.pixelRatio} retina, msaa ${t.ultra.samples}>${t.high.samples}, ` +
-    `2x high skips bloom, half-res lines, lines stay on through medium, bloom/lines off at low`,
+  `res ultra ${t.ultra.pixelRatio} / high ${t.high.pixelRatio} retina, msaa ${t.ultra.samples}>${t.high.samples}, ` +
+    `high 1.5x skips bloom, half-res lines, lines stay on through medium, bloom/lines off at low`,
 );
 check(
   report.recovered.pixelRatio > report.bottom.pixelRatio,

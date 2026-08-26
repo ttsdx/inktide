@@ -280,7 +280,7 @@ export class Spray implements GameSystem {
    * in a burst is invisible, halving their size or their opacity is not.
    */
   setQuality(tier: SprayQuality): void {
-    this.qualityScale = tier === 'low' ? 0.3 : tier === 'medium' ? 0.6 : tier === 'high' ? 0.75 : 1;
+    this.qualityScale = tier === 'low' ? 0.3 : tier === 'medium' ? 0.6 : tier === 'high' ? 0.45 : 1;
   }
 
   update(ctx: FrameContext): void {

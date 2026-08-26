@@ -345,7 +345,7 @@ export class Ocean {
         u.uDetailFadeEnd.value = 760;
         this.setDensity(192, 72);
         defs.INK_TIER_HIGH = 1;
-        u.uLodPx.value = 2;
+        u.uLodPx.value = 1.5;
         break;
       case 'ultra':
         u.uDetailStrength.value = 1.0;
