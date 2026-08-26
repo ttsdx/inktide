@@ -127,15 +127,15 @@ export class Sky {
 
   /**
    * Clouds are a full-screen transparent overdraw of FBM. Low skips them.
-   * Medium compiles out the warp sample and the sun-rim density fetch so the
-   * dome still reads as painted sky without paying two extra 5-octave fields.
+   * Medium and high compile out the warp sample and the sun-rim density fetch.
+   * Ultra keeps the full field.
    */
   setQuality(tier: 'low' | 'medium' | 'high' | 'ultra'): void {
     this.clouds.visible = tier !== 'low';
     const defs = this.cloudMat.defines as Record<string, string | number>;
     const before = defs.INK_SKY_CHEAP ?? '';
-    if (tier === 'medium' || tier === 'low') defs.INK_SKY_CHEAP = 1;
-    else delete defs.INK_SKY_CHEAP;
+    if (tier === 'ultra') delete defs.INK_SKY_CHEAP;
+    else defs.INK_SKY_CHEAP = 1;
     const after = defs.INK_SKY_CHEAP ?? '';
     if (after !== before) this.cloudMat.needsUpdate = true;
   }

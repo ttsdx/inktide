@@ -75,7 +75,7 @@ export interface HullContact {
 
 export type OceanQuality = 'low' | 'medium' | 'high' | 'ultra';
 
-const MAX_CONTACTS = 6;
+const MAX_CONTACTS = 4;
 
 export class Ocean {
   readonly mesh: Mesh;

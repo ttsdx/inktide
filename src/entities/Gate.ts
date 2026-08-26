@@ -251,6 +251,14 @@ export class Gate {
     }
     this.group.visible = true;
 
+    // Overlay lamps and banners are additive and fill-bound. Past ~120 m they
+    // are a few pixels of cyan and still a draw. The start/finish gate keeps
+    // them longer so the main straight still reads from the pack.
+    const overlayRange = this.mastHeight > 10 ? 220 : 120;
+    const overlayOn = dist < overlayRange;
+    this.lamp.visible = overlayOn;
+    this.banner.visible = overlayOn;
+
     _side.copy(this.across);
     const lx = this.centre.x + _side.x * this.halfWidth;
     const lz = this.centre.z + _side.z * this.halfWidth;
