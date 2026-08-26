@@ -79,8 +79,8 @@ console.log('\nCOURSE FURNITURE');
 {
   const course = new Course();
   console.log(`  gates            ${course.checkpoints.length} gates`);
-  console.log(`  Each gate is 5 meshes (merged collars/pylons/lamps) + 3 ink`);
-  console.log(`  shells. Far gates are hidden past the water detail fade.`);
+  console.log(`  Each regular gate is 6 instanced draws for the field (shell +`);
+  console.log(`  ink) plus overlay lamps/banner per gate. Start/finish is unique.`);
 }
 
 console.log('\nWHERE THE FRAME COST ACTUALLY IS');
@@ -89,7 +89,7 @@ console.log(`
   196k triangles, 418 meshes in the scene of which 184 are ink shells.
 
   Draw calls break down as:
-    gates          8 meshes each (merged sides), hidden when far
+    gates          instanced shell + per-gate overlay lamps/banner
     boats + riders distance LOD: ink off, then rider off, then frustum
 
   269 draw calls is not a problem on real hardware — a modern GPU issues

@@ -216,7 +216,7 @@ export class Hud {
    * the ocean needs more than the needle does.
    */
   setQuality(tier: 'low' | 'medium' | 'high' | 'ultra'): void {
-    this.dprCap = tier === 'low' || tier === 'medium' ? 1 : tier === 'high' ? 1.5 : 2;
+    this.dprCap = tier === 'low' || tier === 'medium' ? 1 : 2;
     this.resize();
   }
 

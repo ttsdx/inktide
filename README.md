@@ -154,15 +154,16 @@ are pulled when a frame runs long:
    spike should not drop a tier) moves the pixel ratio in small steps with a long
    cooldown, so the controller cannot oscillate.
 2. **Quality tiers** drop MSAA (ultra only), then the interior-line pass, then
-   bloom. Default play (`high`) is 1.5× with no MSAA so a mid-range GPU is not
-   paying 2× samples on every ocean pixel. The same callback also rebuilds the
+   bloom. Default play (`high`) is **2× retina with no MSAA** so a mid-range GPU
+   is not paying 4× samples on every ocean pixel. Ultra keeps 4× MSAA for
+   captures. The same callback also rebuilds the
    ocean disc coarser, shrinks the wake field, trims spray, and hides distant
    AI riders. HUD canvas density follows the same ladder (1× on low/medium,
-   1.5× on high, 2× on ultra). Low hides the cloud dome overdraw entirely.
-3. **Instancing** for buoys and spray. Gates merge both pylons, collars and
-   lamps into one mesh per material so the field is five draws a gate, not
-   thirteen, plus three ink shells. Rider suit/gear/skin/visor materials are
-   shared across the field.
+   2× on high and ultra). Low hides the cloud dome overdraw entirely.
+3. **Instancing** for buoys, spray, and the regular gate shells (collar, mast,
+   arch, plus ink). The unique start/finish gate stays a mesh. Overlay lamps
+   and banners stay per-gate because they pulse. Rider suit/gear/skin/visor
+   materials are shared across the field.
 4. **LOD by construction.** The ocean's radial disc has exponentially-spaced
    rings, so vertex density tracks 1/z without a discrete pop, and short-wave
    detail is damped with distance. Far gates skip their Gerstner solve and are

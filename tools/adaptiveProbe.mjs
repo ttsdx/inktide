@@ -184,15 +184,16 @@ check(
 // single step made a correct ladder look broken.
 const t = report.tiers;
 check(
-  t.ultra.samples > t.high.samples &&
+    t.ultra.samples > t.high.samples &&
     t.medium.bloom &&
     t.high.interiorLines &&
     t.medium.interiorLines &&
     !t.low.bloom &&
     !t.low.interiorLines &&
-    t.ultra.pixelRatio > t.high.pixelRatio,
+    t.high.pixelRatio >= 2 &&
+    t.ultra.pixelRatio >= t.high.pixelRatio,
   'the tier ladder sheds work in the right order',
-  `res ${t.ultra.pixelRatio}>${t.high.pixelRatio}, msaa ${t.ultra.samples}>${t.high.samples}, ` +
+  `res ${t.ultra.pixelRatio}>=${t.high.pixelRatio} retina, msaa ${t.ultra.samples}>${t.high.samples}, ` +
     `lines stay on through medium, bloom/lines off at low`,
 );
 check(
@@ -230,7 +231,7 @@ check(
   'frustum culling removes off-screen geometry',
   `${c.sceneMeshes} meshes -> ${c.drawCalls} calls`,
 );
-check(c.instancedMeshes > 0, 'instancing is in use', `${c.totalInstances} instances in ${c.instancedMeshes} draws`);
+check(c.instancedMeshes >= 6, 'instancing is in use', `${c.totalInstances} instances in ${c.instancedMeshes} draws`);
 
 check(
   t.low.oceanTriangles < t.ultra.oceanTriangles && t.low.wakeResolution < t.ultra.wakeResolution,

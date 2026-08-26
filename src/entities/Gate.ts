@@ -3,14 +3,16 @@ import {
   CylinderGeometry,
   Float32BufferAttribute,
   Group,
+  InstancedMesh,
+  Matrix4,
   Mesh,
   Quaternion,
   Vector3,
 } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { PALETTE } from '../core/Palette.ts';
-import { CelMaterial, makeGlowMaterial } from '../render/materials/CelMaterial.ts';
-import { outlineHierarchy } from '../render/OutlineHull.ts';
+import { CelMaterial, OutlineMaterial, makeGlowMaterial } from '../render/materials/CelMaterial.ts';
+import { computeSmoothedNormals, outlineHierarchy } from '../render/OutlineHull.ts';
 import { LAYER_OPAQUE, LAYER_OVERLAY } from '../render/layers.ts';
 import { detailAt, sampleOcean, type OceanSample } from '../world/gerstner.ts';
 import type { Checkpoint, Course } from '../race/Course.ts';
@@ -53,6 +55,11 @@ export interface GateOptions {
   glowColor?: typeof PALETTE.gateGlow;
   /** Shared opaque materials. One kit for the whole field. */
   kit?: GateKit;
+  /**
+   * Skip collar/pylon/arch/ink — GateField draws those as InstancedMeshes.
+   * Overlay lamps and the pulsing banner stay per-gate because they animate.
+   */
+  instanceShell?: boolean;
 }
 
 /**
@@ -118,6 +125,7 @@ export class Gate {
   /** Left-hand normal, i.e. the pylon-to-pylon axis. */
   readonly across = new Vector3();
   readonly halfWidth: number;
+  readonly mastHeight: number;
 
   private readonly banner: Mesh;
   private readonly bannerMaterial: CelMaterial;
@@ -138,6 +146,7 @@ export class Gate {
     this.index = index;
     this.halfWidth = opts.halfWidth ?? 15;
     const height = opts.height ?? 8.4;
+    this.mastHeight = height;
     const floatRadius = opts.floatRadius ?? 2.1;
     const glowColor = opts.glowColor ?? PALETTE.gateGlow;
 
@@ -157,28 +166,27 @@ export class Gate {
     const collarMat = this.kit.collar;
     const archMat = this.kit.arch;
 
-    // One mesh per material, not one mesh per part. Twelve gates × two pylons
-    // × collar/mast/lamp plus ink shells was 150-odd draws for furniture that
-    // is on screen two at a time. Baking both sides into a single geometry
-    // keeps the silhouette identical and cuts the field to five draws a gate
-    // (collar, mast, arch, lamp, banner) plus three ink shells.
-    const collars: BufferGeometry[] = [];
-    const pylons: BufferGeometry[] = [];
     const lamps: BufferGeometry[] = [];
     for (const side of [-1, 1]) {
       const x = side * this.halfWidth;
-      collars.push(placedCylinder(floatRadius * 0.8, floatRadius, 1.4, 12, x, -0.25, 0));
-      pylons.push(placedCylinder(floatRadius * 0.52, floatRadius * 0.3, height, 10, x, height * 0.5 + 0.1, 0));
       lamps.push(placedCylinder(0.62, 0.86, 1.1, 8, x, height + 1.2, 0));
     }
 
-    const collar = new Mesh(mergeOrThrow(collars), collarMat);
-    collar.name = 'collars';
-    this.group.add(collar);
-
-    const pylon = new Mesh(mergeOrThrow(pylons), hullMat);
-    pylon.name = 'pylons';
-    this.group.add(pylon);
+    // Regular gates share one instanced shell (collar, mast, arch, ink). The
+    // start/finish gate stays a unique mesh because it is taller and a
+    // different colour. Overlay lamps and the banner always stay per-gate:
+    // they pulse, and a unique uniform cannot live on an InstancedMesh.
+    if (!opts.instanceShell) {
+      const shell = buildGateShell(this.halfWidth, height, floatRadius);
+      const collar = new Mesh(shell.collar, collarMat);
+      collar.name = 'collars';
+      this.group.add(collar);
+      const pylon = new Mesh(shell.pylon, hullMat);
+      pylon.name = 'pylons';
+      this.group.add(pylon);
+      const arch = new Mesh(shell.arch, archMat);
+      this.group.add(arch);
+    }
 
     this.lampMaterial = makeGlowMaterial(glowColor.clone(), 2.1);
     this.lamp = new Mesh(mergeOrThrow(lamps), this.lampMaterial);
@@ -187,14 +195,6 @@ export class Gate {
     this.lamp.layers.set(LAYER_OVERLAY);
     this.group.add(this.lamp);
 
-    // The arch. Built as a chord-sampled tube rather than a TorusGeometry
-    // segment so the sag is a controllable catenary-ish curve and the ends land
-    // exactly on the pylon tops at any half-width.
-    const arch = new Mesh(buildArch(this.halfWidth, height + 1.0, this.halfWidth * 0.26), archMat);
-    this.group.add(arch);
-
-    // The banner is the thing that glows and pulses. A separate mesh so its
-    // emissive strength can be driven without touching the arch.
     this.bannerMaterial = makeGlowMaterial(glowColor.clone(), 1.35, 0.92);
     this.banner = new Mesh(
       buildBanner(this.halfWidth * 0.92, height + 0.55, this.halfWidth * 0.24, 2.3),
@@ -204,13 +204,12 @@ export class Gate {
     this.banner.renderOrder = 4;
     this.group.add(this.banner);
 
-    // Props sit below the racers in the ink hierarchy. A captured frame
-    // measured a 14 px stroke on a near gate — wider than the tube it was
-    // outlining — against no line at all on the boats.
-    outlineHierarchy(this.group, { widthPx: 2.2, distanceTaper: 0.9 });
-    this.group.traverse((o) => {
-      if (!o.userData.noOutline) o.layers.set(LAYER_OPAQUE);
-    });
+    if (!opts.instanceShell) {
+      outlineHierarchy(this.group, { widthPx: 2.2, distanceTaper: 0.9 });
+      this.group.traverse((o) => {
+        if (!o.userData.noOutline) o.layers.set(LAYER_OPAQUE);
+      });
+    }
     this.lamp.layers.set(LAYER_OVERLAY);
     this.banner.layers.set(LAYER_OVERLAY);
 
@@ -367,6 +366,26 @@ function mergeOrThrow(parts: BufferGeometry[]): BufferGeometry {
   return merged;
 }
 
+/** Canonical shell used by both unique gates and the instanced field. */
+function buildGateShell(
+  halfWidth: number,
+  height: number,
+  floatRadius = 2.1,
+): { collar: BufferGeometry; pylon: BufferGeometry; arch: BufferGeometry } {
+  const collars: BufferGeometry[] = [];
+  const pylons: BufferGeometry[] = [];
+  for (const side of [-1, 1]) {
+    const x = side * halfWidth;
+    collars.push(placedCylinder(floatRadius * 0.8, floatRadius, 1.4, 12, x, -0.25, 0));
+    pylons.push(placedCylinder(floatRadius * 0.52, floatRadius * 0.3, height, 10, x, height * 0.5 + 0.1, 0));
+  }
+  return {
+    collar: mergeOrThrow(collars),
+    pylon: mergeOrThrow(pylons),
+    arch: buildArch(halfWidth, height + 1.0, halfWidth * 0.26),
+  };
+}
+
 /**
  * A square-section beam swept along a shallow arc from (-halfWidth, y) to
  * (+halfWidth, y + rise). Extruding a quad along sampled chord points keeps the
@@ -461,30 +480,87 @@ function finish(positions: number[], indices: number[]): BufferGeometry {
 /**
  * Owns one gate per checkpoint and ticks them together.
  *
+ * Regular gates share six InstancedMeshes (collar, mast, arch, and an ink
+ * shell for each). The start/finish gate is a unique mesh: it is taller and
+ * a different colour. Overlay lamps and banners stay per-gate because they
+ * pulse.
+ *
  * `RaceDirector` drives `setActiveIndex` from the player's `nextCheckpoint`, and
  * `flashPassed` from the gate-pass event, so the visual layer never has to know
  * anything about lap validation.
  */
+const SHELL_HW = 15;
+const SHELL_H = 8.4;
+const _inst = new Matrix4();
+const _scale = new Matrix4();
+const _zero = new Matrix4().makeScale(0, 0, 0);
+
 export class GateField {
   readonly root = new Group();
   readonly gates: Gate[] = [];
   private readonly kit: GateKit;
+  private readonly batch: Gate[] = [];
+  private readonly shells: InstancedMesh[] = [];
+  private readonly shellGeos: BufferGeometry[] = [];
+  private readonly inkMats: OutlineMaterial[] = [];
 
   constructor(course: Course, opts: GateOptions = {}) {
     this.root.name = 'Gates';
     this.kit = opts.kit ?? makeGateKit();
+
     for (const cp of course.checkpoints) {
+      const instanced = !cp.startFinish;
       const gate = new Gate(cp.index, cp.position, cp.tangent, {
         ...opts,
         kit: this.kit,
         halfWidth: opts.halfWidth ?? gateHalfWidth(cp),
-        // The start/finish gate is taller and reads in a different colour so it
-        // is unmistakable from a kilometre away down the main straight.
         height: cp.startFinish ? 11.5 : (opts.height ?? 8.4),
         glowColor: cp.startFinish ? PALETTE.racingLine : (opts.glowColor ?? PALETTE.gateGlow),
+        instanceShell: instanced,
       });
       this.gates.push(gate);
       this.root.add(gate.group);
+      if (instanced) this.batch.push(gate);
+    }
+
+    if (this.batch.length > 0) {
+      const n = this.batch.length;
+      const proto = buildGateShell(SHELL_HW, SHELL_H, opts.floatRadius ?? 2.1);
+      const parts: Array<[BufferGeometry, CelMaterial, string]> = [
+        [proto.collar, this.kit.collar, 'GateCollars'],
+        [proto.pylon, this.kit.hull, 'GatePylons'],
+        [proto.arch, this.kit.arch, 'GateArches'],
+      ];
+      for (const [geo, mat, name] of parts) {
+        computeSmoothedNormals(geo);
+        this.shellGeos.push(geo);
+        const mesh = new InstancedMesh(geo, mat, n);
+        mesh.name = name;
+        mesh.frustumCulled = false;
+        mesh.layers.set(LAYER_OPAQUE);
+        this.root.add(mesh);
+        this.shells.push(mesh);
+
+        const inkMat = new OutlineMaterial({ widthPx: 2.2 });
+        inkMat.uniforms.uDistanceTaper.value = 0.9;
+        geo.computeBoundingBox();
+        const bb = geo.boundingBox;
+        if (bb) {
+          const dims = [bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z].sort(
+            (a, b) => a - b,
+          );
+          inkMat.uniforms.uMaxPushWorld.value = Math.max(dims[1] * 0.34, 1e-4);
+        }
+        this.inkMats.push(inkMat);
+        const ink = new InstancedMesh(geo, inkMat, n);
+        ink.name = `${name}Ink`;
+        ink.frustumCulled = false;
+        ink.userData.isOutline = true;
+        ink.layers.set(LAYER_OPAQUE);
+        ink.renderOrder = -1;
+        this.root.add(ink);
+        this.shells.push(ink);
+      }
     }
   }
 
@@ -499,11 +575,35 @@ export class GateField {
 
   update(ctx: FrameContext, eye: Vector3, fadeStart: number, fadeEnd: number): void {
     for (const g of this.gates) g.update(ctx, eye, fadeStart, fadeEnd);
+    const n = this.batch.length;
+    if (n === 0 || this.shells.length === 0) return;
+    for (let i = 0; i < n; i++) {
+      const g = this.batch[i];
+      if (!g.group.visible) {
+        for (const mesh of this.shells) mesh.setMatrixAt(i, _zero);
+        continue;
+      }
+      g.group.updateMatrix();
+      _scale.makeScale(g.halfWidth / SHELL_HW, g.mastHeight / SHELL_H, 1);
+      _inst.multiplyMatrices(g.group.matrix, _scale);
+      for (const mesh of this.shells) mesh.setMatrixAt(i, _inst);
+    }
+    for (const mesh of this.shells) mesh.instanceMatrix.needsUpdate = true;
   }
 
   dispose(): void {
     for (const g of this.gates) g.dispose();
     this.gates.length = 0;
+    this.batch.length = 0;
+    for (const mesh of this.shells) {
+      mesh.removeFromParent();
+      mesh.dispose();
+    }
+    this.shells.length = 0;
+    for (const g of this.shellGeos) g.dispose();
+    this.shellGeos.length = 0;
+    for (const m of this.inkMats) m.dispose();
+    this.inkMats.length = 0;
     this.root.clear();
     this.kit.hull.dispose();
     this.kit.collar.dispose();
